@@ -8,17 +8,17 @@ A self-hosted, OpenAI-compatible LLM gateway. It records real application traffi
 
 ```mermaid
 flowchart LR
-    app[Client app] -->|OpenAI API| gw[gateway]
-    gw -->|SSE proxy| prov[(Providers: local + external LLMs)]
-    gw -. request.completed .-> mq[[RabbitMQ]]
-    mq --> wk[worker]
-    wk --> pg[(PostgreSQL)]
-    api[api: control plane] --> pg
-    api -. rules.changed via outbox .-> mq
-    mq -. rules.changed .-> gw
-    gw --- rd[(Redis)]
+    app["Client app"] -->|"OpenAI API"| gw["gateway"]
+    gw -->|"SSE proxy"| prov[("Providers: local + external LLMs")]
+    gw -.->|"request.completed"| mq(["RabbitMQ"])
+    mq --> wk["worker"]
+    wk --> pg[("PostgreSQL")]
+    api["api: control plane"] --> pg
+    api -.->|"rules.changed via outbox"| mq
+    mq -.->|"rules.changed"| gw
+    gw --- rd[("Redis")]
     api --- rd
-    web[web: admin UI] -->|HTTP| api
+    web["web: admin UI"] -->|"HTTP"| api
 ```
 
 - **gateway** - data plane: key check, model choice from an in-memory snapshot, streaming proxy, traffic events. No database on the hot path.
