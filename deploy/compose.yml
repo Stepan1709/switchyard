@@ -1,0 +1,104 @@
+name: switchyard
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:17.11-alpine
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # The official image reads the password from a file, so it never appears in environment.
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512M}
+    logging: *logging
+
+  redis:
+    image: redis:8.6.8-alpine
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    # The password is read from the secret file at start; sh -c is needed only for that substitution.
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$(cat /run/secrets/redis_password)\" --appendonly yes --maxmemory 128mb --maxmemory-policy noeviction"]
+    secrets: [redis_password]
+    volumes:
+      - redis_data:/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/redis_password)\" redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 192M}
+    logging: *logging
+
+  rabbitmq:
+    image: rabbitmq:4.3.7-management-alpine
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    environment:
+      RABBITMQ_USER: ${RABBITMQ_USER}
+    # The image no longer supports RABBITMQ_DEFAULT_PASS_FILE, so the wrapper renders a config
+    # file (mode 600, owned by rabbitmq) from the secret before starting the broker.
+    # A dedicated user is created instead of the default guest account.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        install -m 600 -o rabbitmq -g rabbitmq /dev/null /etc/rabbitmq/conf.d/20-credentials.conf
+        printf 'default_user = %s\ndefault_pass = %s\n' "$$RABBITMQ_USER" "$$(cat /run/secrets/rabbitmq_password)" > /etc/rabbitmq/conf.d/20-credentials.conf
+        exec docker-entrypoint.sh rabbitmq-server
+    secrets: [rabbitmq_password]
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks: [data]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512M}
+    logging: *logging
+
+secrets:
+  postgres_password:
+    file: ./secrets/dev/postgres_password
+  redis_password:
+    file: ./secrets/dev/redis_password
+  rabbitmq_password:
+    file: ./secrets/dev/rabbitmq_password
+
+networks:
+  # No external access: services in this network are reachable only from other containers.
+  data:
+    internal: true
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:

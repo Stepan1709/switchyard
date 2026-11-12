@@ -1,0 +1,38 @@
+# Development overrides: published ports and Adminer.
+# The `data` network is internal, so published services also join `access`.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    ports: ["127.0.0.1:${POSTGRES_PORT}:5432"]
+    networks: [data, access]
+  redis:
+    ports: ["127.0.0.1:${REDIS_PORT}:6379"]
+    networks: [data, access]
+  rabbitmq:
+    ports:
+      - "127.0.0.1:${RABBITMQ_PORT}:5672"
+      - "127.0.0.1:${RABBITMQ_UI_PORT}:15672"
+    networks: [data, access]
+
+  adminer:
+    image: adminer:5.5.1
+    restart: unless-stopped
+    init: true
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    ports: ["127.0.0.1:${ADMINER_PORT}:8080"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [data, access]
+    deploy:
+      resources:
+        limits: {cpus: "0.25", memory: 128M}
+    logging: *logging
+
+networks:
+  access:
