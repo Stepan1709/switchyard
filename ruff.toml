@@ -1,0 +1,14 @@
+line-length = 100
+target-version = "py312"
+extend-exclude = ["learning"]
+
+[lint]
+# E/F/W: pycodestyle+pyflakes, I: imports, B: bugbear, UP: pyupgrade,
+# ASYNC: blocking calls inside coroutines (project rule: async only), SIM/C4/RUF: simplifications.
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "C4", "SIM", "RUF"]
+
+[lint.isort]
+known-first-party = ["app"]
+
+[format]
+quote-style = "double"
