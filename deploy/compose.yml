@@ -127,9 +127,21 @@ services:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
       rabbitmq: {condition: service_healthy}
+    # Only api gets the signing secret, the key pepper and the first admin password.
+    secrets:
+      - postgres_password
+      - redis_password
+      - rabbitmq_password
+      - jwt_secret
+      - key_pepper
+      - admin_password
     environment:
       <<: *app-env
       SERVICE_NAME: api
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      KEY_PEPPER_FILE: /run/secrets/key_pepper
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD_FILE: /run/secrets/admin_password
     deploy:
       resources:
         limits: {cpus: "1.0", memory: 256M}
@@ -141,6 +153,12 @@ secrets:
     file: ./secrets/dev/redis_password
   rabbitmq_password:
     file: ./secrets/dev/rabbitmq_password
+  jwt_secret:
+    file: ./secrets/dev/jwt_secret
+  key_pepper:
+    file: ./secrets/dev/key_pepper
+  admin_password:
+    file: ./secrets/dev/admin_password
 
 networks:
   # No external access: services in this network are reachable only from other containers.
