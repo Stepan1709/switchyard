@@ -10,6 +10,8 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 COPY app ./app
+COPY alembic.ini ./
+COPY migrations ./migrations
 
 FROM python:3.12.16-slim-bookworm AS runtime
 ENV PATH="/srv/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
@@ -19,9 +21,10 @@ WORKDIR /srv
 COPY --from=builder --chown=app:app /srv /srv
 USER app
 EXPOSE 8001
-# The /health/live endpoint appears together with the FastAPI app (stage 1).
-# Until then the check only confirms that the interpreter and package import work.
-HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
-    CMD ["python", "-c", "import app"]
-# Exec form: the process is PID 1 and receives SIGTERM directly (graceful shutdown).
-CMD ["python", "-m", "app"]
+# The process is alive and serving: /health/live does not touch any dependency.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=5 \
+    CMD ["python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8001/health/live', timeout=2)"]
+# Exec form: uvicorn is PID 1 and receives SIGTERM directly. On SIGTERM it stops accepting
+# connections and waits up to 20 s for in-flight requests (compose gives 30 s before SIGKILL).
+CMD ["uvicorn", "app.api_main:app", "--host", "0.0.0.0", "--port", "8001", \
+     "--timeout-graceful-shutdown", "20", "--no-access-log"]

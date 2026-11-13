@@ -19,6 +19,10 @@ services:
       - "127.0.0.1:${RABBITMQ_UI_PORT}:15672"
     networks: [data, access]
 
+  api:
+    ports: ["127.0.0.1:${API_PORT:-8001}:8001"]
+    networks: [data, access]
+
   adminer:
     image: adminer:5.5.1
     restart: unless-stopped

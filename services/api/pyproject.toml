@@ -3,15 +3,28 @@ name = "switchyard-api"
 version = "0.1.0"
 description = "Switchyard: control plane, gateway and worker (single image, three entry points)"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "aio-pika==10.2.3",
+    "alembic==1.20.1",
+    "asyncpg==0.32.0",
+    "fastapi==0.162.5",
+    "httpx==0.28.1",
+    "pydantic-settings==2.16.2",
+    "redis==8.1.0",
+    "sqlalchemy[asyncio]==2.1.8",
+    "structlog==26.1.0",
+    "uvicorn==0.54.0",
+]
 
 [dependency-groups]
 dev = [
+    "asgi-lifespan==2.1.0",
     "mypy==2.4.1",
     "pytest==9.2.0",
     "pytest-asyncio==1.4.1.post1",
     "pytest-cov==7.1.0",
     "ruff==0.17.4",
+    "testcontainers==4.15.0",
 ]
 
 [tool.uv]
@@ -22,6 +35,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "--cov=app --cov-report=term-missing"
+markers = ["integration: needs Docker (testcontainers)"]
 
 [tool.coverage.run]
 branch = true
@@ -31,3 +45,11 @@ source = ["app"]
 python_version = "3.12"
 strict = true
 warn_unreachable = true
+
+# Tests are checked (check_untyped_defs) but do not need annotations on every fixture.
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_untyped_decorators = false
+disallow_incomplete_defs = false
+check_untyped_defs = true

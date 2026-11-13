@@ -6,6 +6,28 @@ x-logging: &logging
     max-size: "10m"
     max-file: "3"
 
+x-app: &app
+  build:
+    context: ../services/api
+  image: switchyard-api:local
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 30s
+  environment: &app-env
+    ENV: ${ENV:-dev}
+    POSTGRES_HOST: postgres
+    POSTGRES_USER: ${POSTGRES_USER}
+    POSTGRES_DB: ${POSTGRES_DB}
+    POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    REDIS_HOST: redis
+    REDIS_PASSWORD_FILE: /run/secrets/redis_password
+    RABBITMQ_HOST: rabbitmq
+    RABBITMQ_USER: ${RABBITMQ_USER}
+    RABBITMQ_PASSWORD_FILE: /run/secrets/rabbitmq_password
+  secrets: [postgres_password, redis_password, rabbitmq_password]
+  networks: [data]
+  logging: *logging
+
 services:
   postgres:
     image: postgres:17.11-alpine
@@ -84,6 +106,33 @@ services:
       resources:
         limits: {cpus: "1.0", memory: 512M}
     logging: *logging
+
+  # One-shot: applies migrations and exits. api starts only after it finishes successfully.
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 256M}
+
+  api:
+    <<: *app
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    environment:
+      <<: *app-env
+      SERVICE_NAME: api
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 256M}
 
 secrets:
   postgres_password:

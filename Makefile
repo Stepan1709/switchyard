@@ -7,7 +7,7 @@ SECRETS := postgres_password redis_password rabbitmq_password
 export UV_LINK_MODE := copy
 
 .DEFAULT_GOAL := help
-.PHONY: help env secrets up down logs test lint fmt check-compose pre-commit
+.PHONY: help env secrets up down logs migrate check-shutdown test lint fmt check-compose pre-commit
 
 help: ## List commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -28,14 +28,20 @@ secrets: ## Generate dev secrets in deploy/secrets/dev (existing ones are kept)
 	# 644, not 600: processes inside containers (postgres, rabbitmq) run as other users.
 	# In prod the files live outside the repository with permissions set on the server.
 
-up: env secrets ## Start the core (postgres, redis, rabbitmq) and dev tools (Adminer)
-	$(COMPOSE) up -d --wait
+up: env secrets ## Start the stack: postgres, redis, rabbitmq, migrations, api + Adminer
+	$(COMPOSE) up -d --build --wait
 
 down: ## Stop everything
 	$(COMPOSE) down
 
 logs: ## Follow container logs
 	$(COMPOSE) logs -f --tail=100
+
+migrate: env secrets ## Apply database migrations (one-shot container)
+	$(COMPOSE) run --rm --build migrate
+
+check-shutdown: ## Time `docker compose stop api`: graceful shutdown must take a few seconds
+	python3 scripts/check_shutdown.py
 
 test: ## Unit and integration tests of all services
 	@for s in $(SERVICES); do \
