@@ -26,5 +26,5 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=5 \
     CMD ["python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8001/health/live', timeout=2)"]
 # Exec form: uvicorn is PID 1 and receives SIGTERM directly. On SIGTERM it stops accepting
 # connections and waits up to 20 s for in-flight requests (compose gives 30 s before SIGKILL).
-CMD ["uvicorn", "app.api_main:app", "--host", "0.0.0.0", "--port", "8001", \
+CMD ["uvicorn", "--factory", "app.api_main:create_app", "--host", "0.0.0.0", "--port", "8001", \
      "--timeout-graceful-shutdown", "20", "--no-access-log"]

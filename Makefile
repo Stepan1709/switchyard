@@ -2,12 +2,12 @@
 SHELL := /bin/bash
 COMPOSE := docker compose --env-file .env -f deploy/compose.yml -f deploy/compose.dev.yml
 SERVICES := api
-SECRETS := postgres_password redis_password rabbitmq_password
+SECRETS := postgres_password redis_password rabbitmq_password jwt_secret key_pepper admin_password
 # The repo may live on a Windows drive mounted into WSL; hardlinks do not work there.
 export UV_LINK_MODE := copy
 
 .DEFAULT_GOAL := help
-.PHONY: help env secrets up down logs migrate check-shutdown test lint fmt check-compose pre-commit
+.PHONY: help env secrets up down logs migrate create-admin check-shutdown test lint fmt check-compose pre-commit
 
 help: ## List commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -39,6 +39,9 @@ logs: ## Follow container logs
 
 migrate: env secrets ## Apply database migrations (one-shot container)
 	$(COMPOSE) run --rm --build migrate
+
+create-admin: ## Create an administrator: make create-admin EMAIL=you@example.com [ROLE=viewer]
+	$(COMPOSE) run --rm -it api python -m app.cli create-admin --email $(EMAIL) --role $(or $(ROLE),admin)
 
 check-shutdown: ## Time `docker compose stop api`: graceful shutdown must take a few seconds
 	python3 scripts/check_shutdown.py

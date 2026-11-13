@@ -37,11 +37,27 @@ make up        # postgres, redis, rabbitmq, migrations, api + Adminer; waits for
 make test      # unit and integration tests (integration tests start containers via Docker)
 make lint      # ruff + mypy
 make migrate   # apply database migrations (also runs automatically before api on `make up`)
+make create-admin EMAIL=you@example.com   # create an administrator (password prompt)
 make down
 ```
 
 Dev endpoints (localhost only): API `:8001` (`/docs`, `/health/live`, `/health/ready`), Adminer `:8080`, RabbitMQ UI `:15672`, Postgres `:5433`, Redis `:6379`, AMQP `:5672`.
 Run `make help` for all commands.
+
+## Admin API: first steps
+
+On `make up` the first administrator is created from `ADMIN_EMAIL` (see `.env`) and the dev secret
+`deploy/secrets/dev/admin_password`, if no administrator exists yet. Interactive docs: `http://localhost:8001/docs`.
+
+```bash
+PW=$(cat deploy/secrets/dev/admin_password)
+TOKEN=$(curl -s localhost:8001/auth/login -H 'content-type: application/json'   -d "{\"email\":\"admin@example.com\",\"password\":\"$PW\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+curl -s -X POST localhost:8001/projects -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"name":"demo"}'
+# then POST /projects/{id}/keys: the response contains the client key (swy_...) exactly once
+```
+
+Access model: administrators (`admin` can change things, `viewer` is read-only) see only the projects they are members of.
+Client API keys look like `swy_<prefix>_<secret>`; only the prefix and an HMAC of the secret are stored.
 
 ## Repository layout
 

@@ -6,9 +6,12 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "aio-pika==10.2.3",
     "alembic==1.20.1",
+    "argon2-cffi==25.1.0",
     "asyncpg==0.32.0",
+    "email-validator==2.3.0",
     "fastapi==0.162.5",
     "httpx==0.28.1",
+    "pyjwt==2.15.1",
     "pydantic-settings==2.16.2",
     "redis==8.1.0",
     "sqlalchemy[asyncio]==2.1.8",
@@ -19,6 +22,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "asgi-lifespan==2.1.0",
+    "hypothesis==6.170.15",
     "mypy==2.4.1",
     "pytest==9.2.0",
     "pytest-asyncio==1.4.1.post1",
@@ -39,6 +43,8 @@ markers = ["integration: needs Docker (testcontainers)"]
 
 [tool.coverage.run]
 branch = true
+# SQLAlchemy async runs sync code in greenlets; without this their lines are not counted.
+concurrency = ["greenlet", "thread"]
 source = ["app"]
 
 [tool.mypy]
@@ -51,5 +57,10 @@ warn_unreachable = true
 module = "tests.*"
 disallow_untyped_defs = false
 disallow_untyped_decorators = false
+disallow_untyped_calls = false
 disallow_incomplete_defs = false
 check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "asyncpg"
+ignore_missing_imports = true
