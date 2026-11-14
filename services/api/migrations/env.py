@@ -12,7 +12,10 @@ from app.core.db import Base
 
 config = context.config
 target_metadata = Base.metadata
-# Models are imported here so that autogenerate sees them (none yet).
+# Models are imported so that autogenerate and metadata checks see every table.
+import app.modules.audit.models  # noqa: E402
+import app.modules.auth.models  # noqa: E402
+import app.modules.projects.models  # noqa: E402,F401
 
 
 def _url() -> str:

@@ -21,9 +21,46 @@ class AppError(Exception):
     title = "Bad request"
     code = "bad_request"
 
-    def __init__(self, detail: str | None = None) -> None:
+    def __init__(self, detail: str | None = None, headers: dict[str, str] | None = None) -> None:
         super().__init__(detail or self.title)
         self.detail = detail or self.title
+        self.headers = headers
+
+
+class Unauthorized(AppError):
+    status_code = 401
+    title = "Unauthorized"
+    code = "unauthorized"
+
+    def __init__(self, detail: str | None = None) -> None:
+        super().__init__(detail, headers={"WWW-Authenticate": "Bearer"})
+
+
+class Forbidden(AppError):
+    status_code = 403
+    title = "Forbidden"
+    code = "forbidden"
+
+
+class NotFound(AppError):
+    status_code = 404
+    title = "Not found"
+    code = "not_found"
+
+
+class Conflict(AppError):
+    status_code = 409
+    title = "Conflict"
+    code = "conflict"
+
+
+class TooManyRequests(AppError):
+    status_code = 429
+    title = "Too many requests"
+    code = "too_many_requests"
+
+    def __init__(self, retry_after: int, detail: str | None = None) -> None:
+        super().__init__(detail, headers={"Retry-After": str(max(retry_after, 1))})
 
 
 def problem(
@@ -32,6 +69,7 @@ def problem(
     detail: str | None = None,
     code: str | None = None,
     correlation_id: str | None = None,
+    headers: dict[str, str] | None = None,
     **extra: object,
 ) -> JSONResponse:
     body: dict[str, object] = {"type": "about:blank", "title": title, "status": status}
@@ -43,7 +81,7 @@ def problem(
     if cid:
         body["correlation_id"] = cid
     body.update(extra)
-    return JSONResponse(body, status_code=status, media_type=PROBLEM_JSON)
+    return JSONResponse(body, status_code=status, media_type=PROBLEM_JSON, headers=headers)
 
 
 def _cid(request: Request) -> str | None:
@@ -56,7 +94,14 @@ def _cid(request: Request) -> str | None:
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _app_error(request: Request, exc: AppError) -> JSONResponse:
-        return problem(exc.status_code, exc.title, exc.detail, exc.code, _cid(request))
+        return problem(
+            exc.status_code,
+            exc.title,
+            exc.detail,
+            exc.code,
+            _cid(request),
+            headers=exc.headers,
+        )
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:

@@ -18,7 +18,14 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
-SECRET_FIELDS = ("postgres_password", "redis_password", "rabbitmq_password")
+SECRET_FIELDS = (
+    "postgres_password",
+    "redis_password",
+    "rabbitmq_password",
+    "jwt_secret",
+    "key_pepper",
+    "admin_password",
+)
 
 
 class _FileSecretsSource(PydanticBaseSettingsSource):
@@ -81,6 +88,22 @@ class Settings(BaseSettings):
     # How long a readiness probe waits for each dependency.
     health_check_timeout: float = 2.0
 
+    # Authentication. jwt_secret signs access tokens; key_pepper is the server-side secret
+    # mixed into API key hashes (a database leak alone is then not enough to check guesses).
+    jwt_secret: SecretStr = SecretStr("")
+    key_pepper: SecretStr = SecretStr("")
+    access_token_ttl_seconds: int = 900
+    refresh_token_ttl_seconds: int = 7 * 24 * 3600
+    password_min_length: int = 12
+    # Login throttling: failures within the window, counted per email and per client IP.
+    login_max_failures_per_email: int = 5
+    login_max_failures_per_ip: int = 30
+    login_window_seconds: int = 900
+
+    # Optional bootstrap of the first administrator (created only if no admin exists yet).
+    admin_email: str = ""
+    admin_password: SecretStr = SecretStr("")
+
     @classmethod
     def settings_customise_sources(
         cls,
@@ -96,6 +119,12 @@ class Settings(BaseSettings):
             _FileSecretsSource(settings_cls, dict(os.environ)),
             env_settings,
         )
+
+    def require_auth_secrets(self) -> None:
+        """Fail fast at startup: weak or missing secrets must never reach production."""
+        for name in ("jwt_secret", "key_pepper"):
+            if len(getattr(self, name).get_secret_value()) < 32:
+                raise ValueError(f"{name} must be at least 32 characters (set {name.upper()}_FILE)")
 
     @property
     def database_url(self) -> str:

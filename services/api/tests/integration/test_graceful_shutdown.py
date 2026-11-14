@@ -39,6 +39,8 @@ async def test_sigterm_finishes_inflight_request_and_exits_fast(
         "RABBITMQ_HOST": rabbit_ep.host,
         "RABBITMQ_PORT": str(rabbit_ep.port),
         "RABBITMQ_PASSWORD": "test-password",
+        "JWT_SECRET": "j" * 40,
+        "KEY_PEPPER": "p" * 40,
     }
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "uvicorn", "tests.integration.slow_app:app",
