@@ -29,7 +29,7 @@ async def second_admin(client, root, email="second@example.com", role="admin"):
     return bearer((await login(client, email, GOOD_PASSWORD)).json())
 
 
-# ---- projects and membership (IDOR) ----------------------------------------------------------
+# ---- projects and membership (IDOR) ----
 async def test_creator_is_a_member_and_sees_the_project(client, root, project):
     listed = (await client.get("/projects", headers=root)).json()
     assert [p["id"] for p in listed] == [project["id"]]
@@ -105,7 +105,7 @@ async def test_viewer_member_can_read_but_not_change(client, root, project):
     ).status_code == 403
 
 
-# ---- API keys --------------------------------------------------------------------------------
+# ---- API keys ----
 async def create_key(client, root, project, **body):
     r = await client.post(
         f"/projects/{project['id']}/keys", json={"name": "prod", **body}, headers=root

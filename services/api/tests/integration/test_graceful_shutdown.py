@@ -11,7 +11,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tests.integration.conftest import Endpoint
+from tests.integration.conftest import MASTER_KEYS, Endpoint
 
 pytestmark = pytest.mark.integration
 
@@ -41,6 +41,7 @@ async def test_sigterm_finishes_inflight_request_and_exits_fast(
         "RABBITMQ_PASSWORD": "test-password",
         "JWT_SECRET": "j" * 40,
         "KEY_PEPPER": "p" * 40,
+        "MASTER_KEYS": MASTER_KEYS.splitlines()[0],
     }
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "uvicorn", "tests.integration.slow_app:app",

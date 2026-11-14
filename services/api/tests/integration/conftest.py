@@ -1,7 +1,12 @@
 """Real PostgreSQL, Redis and RabbitMQ in containers (the images used by compose)."""
 
 import asyncio
+import base64
 import os
+import socket
+import subprocess
+import sys
+import time
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
@@ -50,6 +55,14 @@ def endpoint(container: DockerContainer, port: int) -> Endpoint:
 
 JWT_SECRET = "j" * 40
 KEY_PEPPER = "p" * 40
+# Two keys: the first encrypts, the second only decrypts (as after a rotation).
+MASTER_KEYS = "\n".join(
+    [
+        "k2:" + base64.b64encode(b"2" * 32).decode(),
+        "k1:" + base64.b64encode(b"1" * 32).decode(),
+    ]
+)
+MOCK_KEY = "mock-provider-key-1234"
 
 
 def make_settings(pg: Endpoint, redis: Endpoint, rabbit: Endpoint, **overrides: object) -> Settings:
@@ -66,6 +79,9 @@ def make_settings(pg: Endpoint, redis: Endpoint, rabbit: Endpoint, **overrides: 
         rabbitmq_password=PASSWORD,  # type: ignore[arg-type]
         jwt_secret=JWT_SECRET,  # type: ignore[arg-type]
         key_pepper=KEY_PEPPER,  # type: ignore[arg-type]
+        master_keys=MASTER_KEYS,  # type: ignore[arg-type]
+        # `localhost` stands for a self-hosted provider (the mock server started by a fixture).
+        local_provider_hosts=["localhost"],
         **overrides,  # type: ignore[arg-type]
     )
 
@@ -125,7 +141,7 @@ async def running_app(settings: Settings) -> AsyncIterator[FastAPI]:
         yield app
 
 
-# ---- isolated databases ---------------------------------------------------------------------
+# ---- isolated databases ----
 # One migrated template database per session; every test gets its own cheap copy of it, so
 # tests never see each other's rows and still run against the real schema.
 ADMIN_EMAIL = "root@example.com"
@@ -198,3 +214,42 @@ def alembic_config(url: str) -> Config:
     cfg.set_main_option("script_location", str(API_ROOT / "migrations"))
     cfg.set_main_option("sqlalchemy.url", url)
     return cfg
+
+
+# ---- a real mock_llm process ----
+MOCK_ROOT = API_ROOT.parent / "mock_llm"
+
+
+@dataclass
+class MockServer:
+    base_url: str  # http://localhost:<port>/v1
+    port: int
+
+
+@pytest.fixture(scope="session")
+def mock_llm() -> Iterator[MockServer]:
+    """The real mock provider in a subprocess. It requires an API key, like a paid provider."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = int(s.getsockname()[1])
+    env = {**os.environ, "MOCK_API_KEY": MOCK_KEY, "MOCK_TIME_SCALE": "0"}
+    proc = subprocess.Popen(
+        [
+            sys.executable, "-m", "uvicorn", "--factory", "app.main:create_app",
+            "--host", "127.0.0.1", "--port", str(port), "--no-access-log",
+        ],
+        cwd=MOCK_ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )  # fmt: skip
+    try:
+        for _ in range(100):
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                    break
+            except OSError:
+                time.sleep(0.1)
+        else:
+            raise RuntimeError("mock_llm did not start")
+        yield MockServer(f"http://localhost:{port}/v1", port)
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)

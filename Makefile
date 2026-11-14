@@ -1,8 +1,8 @@
 # Run from WSL or Linux. Main commands: make help.
 SHELL := /bin/bash
 COMPOSE := docker compose --env-file .env -f deploy/compose.yml -f deploy/compose.dev.yml
-SERVICES := api
-SECRETS := postgres_password redis_password rabbitmq_password jwt_secret key_pepper admin_password
+SERVICES := api mock_llm
+SECRETS := postgres_password redis_password rabbitmq_password jwt_secret key_pepper admin_password master_keys
 # The repo may live on a Windows drive mounted into WSL; hardlinks do not work there.
 export UV_LINK_MODE := copy
 
@@ -20,7 +20,11 @@ secrets: ## Generate dev secrets in deploy/secrets/dev (existing ones are kept)
 	@for n in $(SECRETS); do \
 	  f=deploy/secrets/dev/$$n; \
 	  if [ ! -f $$f ]; then \
-	    openssl rand -base64 33 | tr -d '/+=\n' > $$f; \
+	    if [ "$$n" = master_keys ]; then \
+	      echo "k1:$$(openssl rand -base64 32)" > $$f; \
+	    else \
+	      openssl rand -base64 33 | tr -d '/+=\n' > $$f; \
+	    fi; \
 	    chmod 644 $$f; \
 	    echo "created $$f"; \
 	  fi; \
@@ -28,7 +32,7 @@ secrets: ## Generate dev secrets in deploy/secrets/dev (existing ones are kept)
 	# 644, not 600: processes inside containers (postgres, rabbitmq) run as other users.
 	# In prod the files live outside the repository with permissions set on the server.
 
-up: env secrets ## Start the stack: postgres, redis, rabbitmq, migrations, api + Adminer
+up: env secrets ## Start the stack: postgres, redis, rabbitmq, migrations, api, mock_llm + Adminer
 	$(COMPOSE) up -d --build --wait
 
 down: ## Stop everything

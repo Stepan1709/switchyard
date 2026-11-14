@@ -135,6 +135,9 @@ services:
       - jwt_secret
       - key_pepper
       - admin_password
+      - master_keys
+    # data: reach postgres, redis, rabbitmq and mock_llm. egress: reach external providers.
+    networks: [data, egress]
     environment:
       <<: *app-env
       SERVICE_NAME: api
@@ -142,9 +145,26 @@ services:
       KEY_PEPPER_FILE: /run/secrets/key_pepper
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      MASTER_KEYS_FILE: /run/secrets/master_keys
+      # Hosts that may be private-network providers (only for providers marked local).
+      LOCAL_PROVIDER_HOSTS: mock_llm,ollama
     deploy:
       resources:
         limits: {cpus: "1.0", memory: 256M}
+
+  # OpenAI-compatible provider simulator for tests, demos and load measurements.
+  mock_llm:
+    build:
+      context: ../services/mock_llm
+    image: switchyard-mock-llm:local
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    networks: [data]
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 128M}
+    logging: *logging
 
 secrets:
   postgres_password:
@@ -159,8 +179,12 @@ secrets:
     file: ./secrets/dev/key_pepper
   admin_password:
     file: ./secrets/dev/admin_password
+  master_keys:
+    file: ./secrets/dev/master_keys
 
 networks:
+  # Outgoing traffic to external providers (api only). Nothing is published on it.
+  egress:
   # No external access: services in this network are reachable only from other containers.
   data:
     internal: true

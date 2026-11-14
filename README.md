@@ -33,7 +33,7 @@ Requirements: Linux or WSL2, Docker with Compose v2, `make`, `uv`, `git`.
 
 ```bash
 make secrets   # random dev passwords in deploy/secrets/dev (not committed)
-make up        # postgres, redis, rabbitmq, migrations, api + Adminer; waits for healthchecks
+make up        # postgres, redis, rabbitmq, migrations, api, mock_llm + Adminer; waits for healthchecks
 make test      # unit and integration tests (integration tests start containers via Docker)
 make lint      # ruff + mypy
 make migrate   # apply database migrations (also runs automatically before api on `make up`)
@@ -41,7 +41,7 @@ make create-admin EMAIL=you@example.com   # create an administrator (password pr
 make down
 ```
 
-Dev endpoints (localhost only): API `:8001` (`/docs`, `/health/live`, `/health/ready`), Adminer `:8080`, RabbitMQ UI `:15672`, Postgres `:5433`, Redis `:6379`, AMQP `:5672`.
+Dev endpoints (localhost only): API `:8001` (`/docs`, `/health/live`, `/health/ready`), mock provider `:8003`, Adminer `:8080`, RabbitMQ UI `:15672`, Postgres `:5433`, Redis `:6379`, AMQP `:5672`.
 Run `make help` for all commands.
 
 ## Admin API: first steps
@@ -59,10 +59,28 @@ curl -s -X POST localhost:8001/projects -H "authorization: Bearer $TOKEN" -H 'co
 Access model: administrators (`admin` can change things, `viewer` is read-only) see only the projects they are members of.
 Client API keys look like `swy_<prefix>_<secret>`; only the prefix and an HMAC of the secret are stored.
 
+## Providers and models
+
+`mock_llm` is an OpenAI-compatible provider simulator (`mock-tiny`, `mock-mid`, `mock-strong`, `mock-judge`) with
+deterministic answers of different quality, streaming, `usage`, tool calls, context limits and failure injection
+(`x-mock-fail: 500|503|429|timeout`, `x-mock-delay-ms`, `x-mock-output-tokens`, `x-mock-drop-after-chunks`).
+
+```bash
+# register the mock as a self-hosted provider, add a model, check the connection
+curl -s -X POST localhost:8001/providers -H "authorization: Bearer $TOKEN" -H 'content-type: application/json'   -d '{"name":"mock","base_url":"http://mock_llm:8003/v1","auth_type":"none","is_local":true}'
+# POST /models, POST /models/{id}/prices (price history), POST /providers/{id}/test
+```
+
+Provider access keys are stored AES-256-GCM encrypted (key ring from the `master_keys` secret) and are only ever
+returned masked. Provider addresses are validated against SSRF: cloud metadata and link-local ranges are always
+rejected, private addresses are allowed only for providers marked `local` whose host is listed in
+`LOCAL_PROVIDER_HOSTS`, and the connection goes to the address that was checked (not to the name again).
+
 ## Repository layout
 
 ```
 services/api/   application code (api, gateway and worker entry points), migrations, tests, Dockerfile
+services/mock_llm/   OpenAI-compatible provider simulator
 deploy/         compose files, secret templates
 scripts/        helper scripts
 docs/adr/       architecture decision records
