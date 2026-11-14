@@ -19,6 +19,7 @@ Rules
 import asyncio
 import ipaddress
 import socket
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -129,6 +130,35 @@ async def system_resolver(host: str, port: int) -> list[IPAddress]:
         address = str(info[4][0]).split("%")[0]  # drop an IPv6 zone id
         unique.setdefault(address, ipaddress.ip_address(address))
     return list(unique.values())
+
+
+class CachingResolver:
+    """Remembers DNS answers for a short time (the gateway resolves on every request).
+
+    The addresses are still checked on every use (resolve_checked), so the cache never
+    weakens the policy. The TTL bounds how long a changed DNS record can go unnoticed; keep it
+    short (seconds, not minutes).
+    """
+
+    def __init__(
+        self,
+        ttl: float,
+        inner: "Resolver | None" = None,
+        clock: "Callable[[], float]" = time.monotonic,
+    ) -> None:
+        self._ttl = ttl
+        self._inner = inner or system_resolver
+        self._clock = clock
+        self._cache: dict[tuple[str, int], tuple[float, list[IPAddress]]] = {}
+
+    async def __call__(self, host: str, port: int) -> list[IPAddress]:
+        now = self._clock()
+        hit = self._cache.get((host, port))
+        if hit is not None and hit[0] > now:
+            return hit[1]
+        addresses = await self._inner(host, port)
+        self._cache[(host, port)] = (now + self._ttl, addresses)
+        return addresses
 
 
 async def resolve_checked(

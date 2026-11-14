@@ -33,7 +33,7 @@ Requirements: Linux or WSL2, Docker with Compose v2, `make`, `uv`, `git`.
 
 ```bash
 make secrets   # random dev passwords in deploy/secrets/dev (not committed)
-make up        # postgres, redis, rabbitmq, migrations, api, worker, mock_llm + Adminer; waits for healthchecks
+make up        # postgres, redis, rabbitmq, migrations, api, gateway, worker, mock_llm + Adminer; waits for healthchecks
 make test      # unit and integration tests (integration tests start containers via Docker)
 make lint      # ruff + mypy
 make migrate   # apply database migrations (also runs automatically before api on `make up`)
@@ -41,7 +41,7 @@ make create-admin EMAIL=you@example.com   # create an administrator (password pr
 make down
 ```
 
-Dev endpoints (localhost only): API `:8001` (`/docs`, `/health/live`, `/health/ready`), mock provider `:8003`, worker health `:8004`, Adminer `:8080`, RabbitMQ UI `:15672`, Postgres `:5433`, Redis `:6379`, AMQP `:5672`.
+Dev endpoints (localhost only): gateway `:8000`, API `:8001` (`/docs`, `/health/live`, `/health/ready`), mock provider `:8003`, worker health `:8004`, Adminer `:8080`, RabbitMQ UI `:15672`, Postgres `:5433`, Redis `:6379`, AMQP `:5672`.
 Run `make help` for all commands.
 
 ## Admin API: first steps
@@ -99,6 +99,52 @@ The `worker` container runs the consumers, the outbox relay and hourly cleanup, 
 python -m app.cli dlq list --queue worker.request_log            # what failed and why (no payloads)
 python -m app.cli dlq requeue --queue worker.request_log --limit 10
 ```
+
+## Gateway
+
+An OpenAI-compatible proxy on port `8000`. An application only changes its `base_url` and API key:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1", api_key="swy_..."
+)  # key from POST /projects/{id}/keys
+client.chat.completions.create(model="anything", messages=[...], stream=True)
+```
+
+In `record` mode (the only mode so far) every request goes to the project's **reference model**, whatever `model` the
+application sends; the answer, including streams, tool calls and `usage`, comes back as the provider produced it.
+
+- **Hot path without the database.** Keys, projects and routes live in an immutable in-memory snapshot, rebuilt in the
+  background every 15 s (so a new or revoked key takes effect within that time). The last snapshot is also copied to Redis
+  (provider keys only as ciphertext) so a gateway can start while PostgreSQL is down.
+- **Streaming** is forwarded chunk by chunk without buffering. The gateway turns on `stream_options.include_usage` to
+  learn the token counts and removes the extra usage-only event again if the client did not ask for it.
+- **Client disconnect** closes the provider connection at once, so no tokens are generated for nobody.
+- **Limits:** request body size, a per-key rate limit (`rate_limit_rpm`, default 600/min; `x-ratelimit-*` headers),
+  concurrent requests per provider. Timeouts are separate for connect, first byte, idle time and total time.
+- **Errors** use the OpenAI shape. Provider answers about the request itself (400, 413, 422, 429) are passed through;
+  provider-side failures (401/403 of the gateway's own key, 404, 5xx, timeouts, unreachable) become 502/504 without the
+  provider's body.
+- Response headers: `x-request-id`, `x-switchyard-model` (which model answered), `x-switchyard-mode`. `x-task-type`
+  sets the task type (default: the key's `default_task_type`).
+- `GET /v1/models`, `GET /health/live`, `GET /health/ready` (ready as soon as a snapshot is loaded).
+
+### Overhead
+
+Measured with `MOCK_TIME_SCALE=0 make up && make bench` (instant mock, everything on one laptop under WSL2, so read the
+numbers as relative; a proper load test comes later). Direct = client to the mock; gateway = client to the gateway to the
+mock, so the difference includes the second HTTP hop.
+
+| non-streaming, 300 sequential requests | p50 | p95 | p99 |
+|---|---|---|---|
+| direct to mock (ms) | 1.94 | 2.99 | 4.42 |
+| through the gateway (ms) | 5.10 | 6.67 | 7.64 |
+| overhead (ms) | 3.15 | 3.68 | 3.22 |
+
+Streaming time to the first byte: 2.0 ms direct, 5.1 ms through the gateway (p50). With 32 concurrent clients one gateway
+process handled about 160 requests/s against about 360 for the mock itself (the load generator shares the machine).
 
 ## Repository layout
 
