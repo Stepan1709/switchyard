@@ -6,14 +6,14 @@ read it, only the admin role may change it.
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request, Response, status
 
 from app.core import ssrf
 from app.core.crypto import KeyRing
 from app.core.deps import HttpClientDep, SessionDep
-from app.modules.auth.deps import AdminOnly, CurrentAdmin, SettingsDep, client_ip
+from app.modules.auth.deps import AdminOnly, CurrentAdmin, IdempotencyDep, SettingsDep, client_ip
 from app.modules.registry.schemas import (
     ConnectionTestRequest,
     ConnectionTestResult,
@@ -55,9 +55,16 @@ ModelServiceDep = Annotated[ModelService, Depends(get_model_service)]
 # ---- providers ----
 @router.post("/providers", response_model=ProviderOut, status_code=status.HTTP_201_CREATED)
 async def create_provider(
-    body: ProviderCreate, request: Request, admin: AdminOnly, service: ProviderServiceDep
-) -> ProviderOut:
-    return ProviderOut.model_validate(await service.create(admin, body, client_ip(request)))
+    body: ProviderCreate,
+    request: Request,
+    admin: AdminOnly,
+    service: ProviderServiceDep,
+    idem: IdempotencyDep,
+) -> Any:
+    async def call() -> ProviderOut:
+        return ProviderOut.model_validate(await service.create(admin, body, client_ip(request)))
+
+    return await idem.run(call, status_code=status.HTTP_201_CREATED)
 
 
 @router.get("/providers", response_model=list[ProviderOut])
@@ -107,9 +114,16 @@ async def test_provider(
 # ---- models ----
 @router.post("/models", response_model=ModelOut, status_code=status.HTTP_201_CREATED)
 async def create_model(
-    body: ModelCreate, request: Request, admin: AdminOnly, service: ModelServiceDep
-) -> ModelOut:
-    return ModelOut.model_validate(await service.create(admin, body, client_ip(request)))
+    body: ModelCreate,
+    request: Request,
+    admin: AdminOnly,
+    service: ModelServiceDep,
+    idem: IdempotencyDep,
+) -> Any:
+    async def call() -> ModelOut:
+        return ModelOut.model_validate(await service.create(admin, body, client_ip(request)))
+
+    return await idem.run(call, status_code=status.HTTP_201_CREATED)
 
 
 @router.get("/models", response_model=list[ModelOut])
@@ -144,9 +158,13 @@ async def set_price(
     request: Request,
     admin: AdminOnly,
     service: ModelServiceDep,
-) -> PriceOut:
-    price = await service.set_price(admin, model_id, body, client_ip(request))
-    return PriceOut.model_validate(price)
+    idem: IdempotencyDep,
+) -> Any:
+    async def call() -> PriceOut:
+        price = await service.set_price(admin, model_id, body, client_ip(request))
+        return PriceOut.model_validate(price)
+
+    return await idem.run(call, status_code=status.HTTP_201_CREATED)
 
 
 @router.get("/models/{model_id}/prices", response_model=list[PriceOut])

@@ -7,16 +7,14 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from app import db_models
 from app.core.config import Settings
 from app.core.db import Base
 
 config = context.config
 target_metadata = Base.metadata
-# Models are imported so that autogenerate and metadata checks see every table.
-import app.modules.audit.models  # noqa: E402
-import app.modules.auth.models  # noqa: E402
-import app.modules.projects.models  # noqa: E402
-import app.modules.registry.models  # noqa: E402,F401
+# Every table must be registered before Alembic compares metadata with the database.
+assert db_models.ALL_MODEL_MODULES
 
 
 def _url() -> str:

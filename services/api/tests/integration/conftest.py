@@ -12,9 +12,11 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+import aio_pika
 import asyncpg
 import httpx
 import pytest
+from aio_pika.abc import AbstractRobustConnection
 from alembic import command
 from alembic.config import Config
 from asgi_lifespan import LifespanManager
@@ -27,6 +29,7 @@ from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 from app.api_main import create_app
 from app.core.config import Settings
+from app.core.messaging import Publisher
 
 # The Ryuk cleanup sidecar needs an extra image pull; containers are removed by fixtures instead.
 os.environ.setdefault("TESTCONTAINERS_RYUK_DISABLED", "true")
@@ -253,3 +256,47 @@ def mock_llm() -> Iterator[MockServer]:
     finally:
         proc.terminate()
         proc.wait(timeout=10)
+
+
+# ---- RabbitMQ helpers ---------------------------------------------------------------------------
+@pytest.fixture
+async def amqp(rabbit_ep: Endpoint) -> AsyncIterator[AbstractRobustConnection]:
+    connection = await aio_pika.connect_robust(
+        f"amqp://switchyard:{PASSWORD}@{rabbit_ep.host}:{rabbit_ep.port}/"
+    )
+    yield connection
+    await connection.close()
+
+
+@pytest.fixture
+def queue_name() -> str:
+    """A fresh queue name per test: queues are durable and shared by the session's broker."""
+    return f"t_{uuid.uuid4().hex[:10]}"
+
+
+@pytest.fixture
+async def publisher(amqp: AbstractRobustConnection) -> Publisher:
+    return await Publisher.create(await amqp.channel())
+
+
+async def wait_until(predicate, timeout: float = 15.0, interval: float = 0.05):  # noqa: ASYNC109
+    """Poll `predicate` (sync or async) until it is truthy; fail the test on timeout."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = predicate()
+        if asyncio.iscoroutine(value):
+            value = await value
+        if value:
+            return value
+        await asyncio.sleep(interval)
+    raise AssertionError("condition was not met in time")
+
+
+async def queue_depth(amqp: AbstractRobustConnection, name: str) -> int:
+    """Number of ready messages in a queue (a passive declare does not create or change it)."""
+    channel = await amqp.channel()
+    try:
+        queue = await channel.declare_queue(name, passive=True)
+        return int(queue.declaration_result.message_count or 0)
+    finally:
+        await channel.close()

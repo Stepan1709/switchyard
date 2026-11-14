@@ -2,12 +2,13 @@
 
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import Settings
 from app.core.deps import RedisDep, SessionDep
 from app.core.errors import Forbidden, Unauthorized
+from app.core.idempotency import Idempotency
 from app.modules.auth import security
 from app.modules.auth.models import Admin
 from app.modules.auth.rate_limit import LoginLimiter
@@ -71,3 +72,25 @@ async def require_admin(admin: CurrentAdmin) -> Admin:
 
 
 AdminOnly = Annotated[Admin, Depends(require_admin)]
+
+
+async def get_idempotency(
+    request: Request,
+    admin: AdminOnly,
+    settings: SettingsDep,
+    idempotency_key: Annotated[str | None, Header()] = None,
+) -> Idempotency:
+    """Idempotency helper for the current request (active only when the header is sent)."""
+    return Idempotency(
+        request.app.state.resources.session_factory,
+        admin_id=admin.id,
+        key=idempotency_key,
+        method=request.method,
+        path=request.url.path,
+        body=await request.body(),
+        ttl_hours=settings.idempotency_ttl_hours,
+        lock_seconds=settings.idempotency_lock_seconds,
+    )
+
+
+IdempotencyDep = Annotated[Idempotency, Depends(get_idempotency)]
