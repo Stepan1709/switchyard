@@ -38,7 +38,7 @@ class AuthService:
         self.limiter = limiter
         self.repo = AuthRepository(session)
 
-    # ---- tokens -------------------------------------------------------------------------
+    # ---- tokens ----
     def _new_refresh(self, admin_id: uuid.UUID, family_id: uuid.UUID) -> tuple[str, RefreshToken]:
         raw = security.new_refresh_token()
         row = RefreshToken(
@@ -65,7 +65,7 @@ class AuthService:
             expires_in=self.settings.access_token_ttl_seconds,
         )
 
-    # ---- login --------------------------------------------------------------------------
+    # ---- login ----
     async def login(self, email: str, password: str, ip: str) -> TokenPair:
         email = normalize_email(email)
         if self.limiter is not None:
@@ -131,7 +131,7 @@ class AuthService:
             audit.record(self.session, action="auth.logout", actor_id=row.admin_id)
             await self.session.commit()
 
-    # ---- administrators -------------------------------------------------------------------
+    # ---- administrators ----
     def _check_password(self, password: str) -> None:
         if len(password) < self.settings.password_min_length:
             raise WeakPassword(

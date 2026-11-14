@@ -18,7 +18,14 @@ class ProjectOut(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
+    reference_model_id: uuid.UUID | None
     created_at: datetime
+
+
+class ReferenceModelSet(BaseModel):
+    """Set the reference model; null clears it."""
+
+    model_id: uuid.UUID | None
 
 
 class MemberAdd(BaseModel):

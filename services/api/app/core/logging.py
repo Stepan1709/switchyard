@@ -61,6 +61,10 @@ def configure_logging(service: str, env: str, level: str = "INFO") -> None:
         lg = logging.getLogger(name)
         lg.handlers.clear()
         lg.propagate = True
+    # httpx logs one INFO line (with the full URL) per outgoing request: too noisy, and URLs
+    # of providers should not end up in logs by default.
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
     # Access logs are written by our middleware (no query strings, no bodies).
     logging.getLogger("uvicorn.access").disabled = True
 

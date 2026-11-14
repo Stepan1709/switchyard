@@ -19,6 +19,11 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     created_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("admins.id", ondelete="SET NULL")
     )
+    # The reference model: in record mode all traffic goes to it and its answers are the
+    # baseline that cheaper models are compared with. Cleared if the model is ever deleted.
+    reference_model_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("models.id", ondelete="SET NULL")
+    )
 
 
 class ProjectMember(Base):

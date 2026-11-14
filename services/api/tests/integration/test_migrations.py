@@ -4,6 +4,7 @@ import pytest
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -29,12 +30,13 @@ async def _version(url: str) -> str | None:
 def test_upgrade_and_downgrade(pg_ep: Endpoint, redis_ep: Endpoint, rabbit_ep: Endpoint):
     url = make_settings(pg_ep, redis_ep, rabbit_ep).database_url
     cfg = alembic_config(url)
+    head = ScriptDirectory.from_config(cfg).get_current_head()
 
     command.upgrade(cfg, "head")
-    assert asyncio.run(_version(url)) == "0002"
+    assert asyncio.run(_version(url)) == head
 
     command.upgrade(cfg, "head")  # running twice is safe
-    assert asyncio.run(_version(url)) == "0002"
+    assert asyncio.run(_version(url)) == head
 
     command.downgrade(cfg, "base")
     assert asyncio.run(_version(url)) is None

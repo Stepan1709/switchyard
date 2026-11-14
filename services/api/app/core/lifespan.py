@@ -10,6 +10,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from fastapi import FastAPI
 
 from app.core.config import Settings
+from app.core.crypto import KeyRing
 from app.core.logging import get_logger
 from app.core.resources import open_resources
 
@@ -33,6 +34,7 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = settings
+        app.state.keyring = KeyRing.from_text(settings.master_keys.get_secret_value())
         app.state.resources = await open_resources(settings)
         await _bootstrap_admin(app, settings)
         log.info("startup_complete")

@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.core.errors import Conflict, NotFound
+from app.core.errors import Conflict, NotFound, Unprocessable
 from app.modules.audit import service as audit
 from app.modules.auth.models import Admin
 from app.modules.auth.repository import AuthRepository
@@ -21,6 +21,7 @@ from app.modules.projects import keys
 from app.modules.projects.models import ApiKey, Project
 from app.modules.projects.repository import ProjectRepository
 from app.modules.projects.schemas import KeyCreate, KeyUpdate, ProjectCreate
+from app.modules.registry.repository import RegistryRepository
 
 
 class ProjectService:
@@ -62,6 +63,30 @@ class ProjectService:
 
     async def get_project(self, admin: Admin, project_id: uuid.UUID) -> Project:
         return await self._project(admin, project_id)
+
+    async def set_reference_model(
+        self, admin: Admin, project_id: uuid.UUID, model_id: uuid.UUID | None, ip: str | None
+    ) -> Project:
+        project = await self._project(admin, project_id)
+        if model_id is not None:
+            model = await RegistryRepository(self.session).get_model(model_id)
+            if model is None:
+                raise NotFound("Model not found")
+            if not model.enabled:
+                raise Unprocessable("A disabled model cannot be the reference model")
+        project.reference_model_id = model_id
+        audit.record(
+            self.session,
+            action="project.reference_model_set",
+            actor_id=admin.id,
+            target_type="project",
+            target_id=project_id,
+            details={"model_id": str(model_id) if model_id else None},
+            ip=ip,
+        )
+        await self.session.commit()
+        await self.session.refresh(project)
+        return project
 
     # members ----------------------------------------------------------------------------
     async def list_members(

@@ -48,6 +48,12 @@ class NotFound(AppError):
     code = "not_found"
 
 
+class Unprocessable(AppError):
+    status_code = 422
+    title = "Unprocessable request"
+    code = "unprocessable"
+
+
 class Conflict(AppError):
     status_code = 409
     title = "Conflict"

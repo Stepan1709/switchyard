@@ -7,13 +7,14 @@ variant is what Docker Compose secrets use, so passwords never appear in `enviro
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import quote
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import (
     BaseSettings,
+    NoDecode,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
@@ -25,6 +26,7 @@ SECRET_FIELDS = (
     "jwt_secret",
     "key_pepper",
     "admin_password",
+    "master_keys",
 )
 
 
@@ -100,6 +102,17 @@ class Settings(BaseSettings):
     login_max_failures_per_ip: int = 30
     login_window_seconds: int = 900
 
+    # Encryption keys for provider credentials: lines "key_id:base64(32 bytes)", the first line
+    # encrypts, all lines can decrypt (rotation). Provided as a secret file.
+    master_keys: SecretStr = SecretStr("")
+
+    # Provider addresses. Hosts listed here may be private-network names (mock_llm, a local
+    # Ollama or vLLM server) and only for providers explicitly marked as local.
+    local_provider_hosts: Annotated[list[str], NoDecode] = ["mock_llm", "ollama"]
+    provider_connect_timeout: float = 5.0
+    provider_read_timeout: float = 30.0
+    provider_max_response_bytes: int = 1_048_576
+
     # Optional bootstrap of the first administrator (created only if no admin exists yet).
     admin_email: str = ""
     admin_password: SecretStr = SecretStr("")
@@ -120,11 +133,22 @@ class Settings(BaseSettings):
             env_settings,
         )
 
+    @field_validator("local_provider_hosts", mode="before")
+    @classmethod
+    def _split_hosts(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [h.strip().lower() for h in value.split(",") if h.strip()]
+        return value
+
     def require_auth_secrets(self) -> None:
         """Fail fast at startup: weak or missing secrets must never reach production."""
         for name in ("jwt_secret", "key_pepper"):
             if len(getattr(self, name).get_secret_value()) < 32:
                 raise ValueError(f"{name} must be at least 32 characters (set {name.upper()}_FILE)")
+        # Parsing validates the format and the key length; the result is built again at startup.
+        from app.core.crypto import KeyRing
+
+        KeyRing.from_text(self.master_keys.get_secret_value())
 
     @property
     def database_url(self) -> str:

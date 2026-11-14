@@ -20,6 +20,7 @@ from app.modules.projects.schemas import (
     MemberOut,
     ProjectCreate,
     ProjectOut,
+    ReferenceModelSet,
 )
 from app.modules.projects.service import ProjectService
 
@@ -50,6 +51,20 @@ async def get_project(
     project_id: uuid.UUID, admin: CurrentAdmin, service: ServiceDep
 ) -> ProjectOut:
     return ProjectOut.model_validate(await service.get_project(admin, project_id))
+
+
+@router.put("/{project_id}/reference-model", response_model=ProjectOut)
+async def set_reference_model(
+    project_id: uuid.UUID,
+    body: ReferenceModelSet,
+    request: Request,
+    admin: AdminOnly,
+    service: ServiceDep,
+) -> ProjectOut:
+    project = await service.set_reference_model(
+        admin, project_id, body.model_id, client_ip(request)
+    )
+    return ProjectOut.model_validate(project)
 
 
 @router.get("/{project_id}/members", response_model=list[MemberOut])
