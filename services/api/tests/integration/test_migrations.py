@@ -8,6 +8,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from app import db_models
 from app.core.db import Base
 from tests.integration.conftest import Endpoint, alembic_config, make_settings
 
@@ -61,9 +62,7 @@ def test_models_match_migrations(pg_ep: Endpoint, redis_ep: Endpoint, rabbit_ep:
 
     Catches the classic mistake of changing a model and forgetting the migration.
     """
-    import app.modules.audit.models
-    import app.modules.auth.models
-    import app.modules.projects.models  # noqa: F401
+    assert db_models.ALL_MODEL_MODULES  # every table is registered in Base.metadata
 
     url = make_settings(pg_ep, redis_ep, rabbit_ep).database_url
     command.upgrade(alembic_config(url), "head")

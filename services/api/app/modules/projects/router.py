@@ -5,12 +5,12 @@ projects a caller can see at all is decided by membership (see the service).
 """
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request, Response, status
 
 from app.core.deps import SessionDep
-from app.modules.auth.deps import AdminOnly, CurrentAdmin, SettingsDep, client_ip
+from app.modules.auth.deps import AdminOnly, CurrentAdmin, IdempotencyDep, SettingsDep, client_ip
 from app.modules.projects.schemas import (
     KeyCreate,
     KeyCreated,
@@ -36,9 +36,18 @@ ServiceDep = Annotated[ProjectService, Depends(get_project_service)]
 
 @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
 async def create_project(
-    body: ProjectCreate, request: Request, admin: AdminOnly, service: ServiceDep
-) -> ProjectOut:
-    return ProjectOut.model_validate(await service.create_project(admin, body, client_ip(request)))
+    body: ProjectCreate,
+    request: Request,
+    admin: AdminOnly,
+    service: ServiceDep,
+    idem: IdempotencyDep,
+) -> Any:
+    async def call() -> ProjectOut:
+        return ProjectOut.model_validate(
+            await service.create_project(admin, body, client_ip(request))
+        )
+
+    return await idem.run(call, status_code=status.HTTP_201_CREATED)
 
 
 @router.get("", response_model=list[ProjectOut])

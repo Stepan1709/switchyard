@@ -33,7 +33,7 @@ Requirements: Linux or WSL2, Docker with Compose v2, `make`, `uv`, `git`.
 
 ```bash
 make secrets   # random dev passwords in deploy/secrets/dev (not committed)
-make up        # postgres, redis, rabbitmq, migrations, api, mock_llm + Adminer; waits for healthchecks
+make up        # postgres, redis, rabbitmq, migrations, api, worker, mock_llm + Adminer; waits for healthchecks
 make test      # unit and integration tests (integration tests start containers via Docker)
 make lint      # ruff + mypy
 make migrate   # apply database migrations (also runs automatically before api on `make up`)
@@ -41,7 +41,7 @@ make create-admin EMAIL=you@example.com   # create an administrator (password pr
 make down
 ```
 
-Dev endpoints (localhost only): API `:8001` (`/docs`, `/health/live`, `/health/ready`), mock provider `:8003`, Adminer `:8080`, RabbitMQ UI `:15672`, Postgres `:5433`, Redis `:6379`, AMQP `:5672`.
+Dev endpoints (localhost only): API `:8001` (`/docs`, `/health/live`, `/health/ready`), mock provider `:8003`, worker health `:8004`, Adminer `:8080`, RabbitMQ UI `:15672`, Postgres `:5433`, Redis `:6379`, AMQP `:5672`.
 Run `make help` for all commands.
 
 ## Admin API: first steps
@@ -75,6 +75,30 @@ Provider access keys are stored AES-256-GCM encrypted (key ring from the `master
 returned masked. Provider addresses are validated against SSRF: cloud metadata and link-local ranges are always
 rejected, private addresses are allowed only for providers marked `local` whose host is listed in
 `LOCAL_PROVIDER_HOSTS`, and the connection goes to the address that was checked (not to the name again).
+
+## Messaging, outbox and the worker
+
+Events and jobs travel through RabbitMQ (`switchyard.events` topic exchange, `switchyard.dlx` for retries and dead
+letters). Every work queue `Q` comes with `Q.retry.1..3` (delays 5 s, 30 s, 5 min through queue TTLs and the
+dead-letter exchange) and `Q.dlq`:
+
+- a handler that raises `TemporaryError` is retried with a growing delay, then dead-lettered;
+- `PermanentError` (or any unexpected exception) goes to the DLQ at once, with the reason in the message headers;
+- publishing waits for the broker's confirmation and is `mandatory`: an event nobody is subscribed to is reported;
+- delivery is at-least-once, so consumers drop duplicates through the inbox (`processed_messages`, written in the same
+  transaction as the business effect);
+- events that must not be lost are written to the `outbox` table in the same transaction as the data, and a relay
+  inside the worker publishes them (`FOR UPDATE SKIP LOCKED`, safe to run in several processes);
+- unsafe admin `POST`s (projects, providers, models, prices) accept an `Idempotency-Key` header: a retry returns the
+  stored response instead of repeating the action.
+
+The `worker` container runs the consumers, the outbox relay and hourly cleanup, and stops gracefully on SIGTERM
+(running handlers finish, unfinished messages go back to the queue).
+
+```bash
+python -m app.cli dlq list --queue worker.request_log            # what failed and why (no payloads)
+python -m app.cli dlq requeue --queue worker.request_log --limit 10
+```
 
 ## Repository layout
 

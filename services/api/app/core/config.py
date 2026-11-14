@@ -113,6 +113,24 @@ class Settings(BaseSettings):
     provider_read_timeout: float = 30.0
     provider_max_response_bytes: int = 1_048_576
 
+    # Messaging. Retry delays in milliseconds: the n-th failure waits delays[n-1] before the
+    # message comes back; after the last one it is dead-lettered. Changing them changes the
+    # TTL of existing retry queues, which the broker refuses: use new queue names for that.
+    retry_delays_ms: Annotated[list[int], NoDecode] = [5_000, 30_000, 300_000]
+    delivery_limit: int = 10  # broker-side cap on redeliveries of one message (crash loops)
+    consumer_prefetch: int = 10
+    outbox_poll_interval: float = 0.5
+    outbox_batch_size: int = 100
+    # An event nobody is subscribed to is retried this many times, then dropped (and logged).
+    outbox_unroutable_attempts: int = 5
+    worker_port: int = 8004
+    worker_shutdown_timeout: float = 25.0
+    processed_retention_days: int = 14  # how long the inbox remembers handled message ids
+
+    # Idempotency-Key for administrator POSTs.
+    idempotency_ttl_hours: int = 24
+    idempotency_lock_seconds: int = 120  # an in-progress claim older than this may be taken over
+
     # Optional bootstrap of the first administrator (created only if no admin exists yet).
     admin_email: str = ""
     admin_password: SecretStr = SecretStr("")
@@ -138,6 +156,13 @@ class Settings(BaseSettings):
     def _split_hosts(cls, value: object) -> object:
         if isinstance(value, str):
             return [h.strip().lower() for h in value.split(",") if h.strip()]
+        return value
+
+    @field_validator("retry_delays_ms", mode="before")
+    @classmethod
+    def _split_delays(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [int(v) for v in value.split(",") if v.strip()]
         return value
 
     def require_auth_secrets(self) -> None:
