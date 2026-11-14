@@ -229,17 +229,16 @@ class MockServer:
     port: int
 
 
-@pytest.fixture(scope="session")
-def mock_llm() -> Iterator[MockServer]:
-    """The real mock provider in a subprocess. It requires an API key, like a paid provider."""
+def _start_mock(time_scale: str) -> Iterator[MockServer]:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = int(s.getsockname()[1])
-    env = {**os.environ, "MOCK_API_KEY": MOCK_KEY, "MOCK_TIME_SCALE": "0"}
+    env = {**os.environ, "MOCK_API_KEY": MOCK_KEY, "MOCK_TIME_SCALE": time_scale}
     proc = subprocess.Popen(
         [
             sys.executable, "-m", "uvicorn", "--factory", "app.main:create_app",
             "--host", "127.0.0.1", "--port", str(port), "--no-access-log",
+            "--timeout-graceful-shutdown", "1",
         ],
         cwd=MOCK_ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )  # fmt: skip
@@ -255,7 +254,22 @@ def mock_llm() -> Iterator[MockServer]:
         yield MockServer(f"http://localhost:{port}/v1", port)
     finally:
         proc.terminate()
-        proc.wait(timeout=10)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+@pytest.fixture(scope="session")
+def mock_llm() -> Iterator[MockServer]:
+    """The real mock provider in a subprocess: instant answers, requires an API key."""
+    yield from _start_mock("0")
+
+
+@pytest.fixture(scope="session")
+def mock_llm_slow() -> Iterator[MockServer]:
+    """The same provider with realistic delays (time to first token, tokens per second)."""
+    yield from _start_mock("1")
 
 
 # ---- RabbitMQ helpers ---------------------------------------------------------------------------

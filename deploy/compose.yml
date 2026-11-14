@@ -152,6 +152,53 @@ services:
       resources:
         limits: {cpus: "1.0", memory: 256M}
 
+  # The data plane: OpenAI-compatible proxy on port 8000. It never queries the database while
+  # serving: keys, projects and routes come from an in-memory snapshot refreshed in the
+  # background. Secrets: the key pepper (to check client keys) and the master keys (to
+  # decrypt the provider keys held in the snapshot, in memory only).
+  gateway:
+    <<: *app
+    command:
+      - uvicorn
+      - --factory
+      - app.gateway_main:create_app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --timeout-graceful-shutdown
+      - "25"
+      - --no-access-log
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    secrets:
+      - postgres_password
+      - redis_password
+      - rabbitmq_password
+      - key_pepper
+      - master_keys
+    networks: [data, egress]
+    environment:
+      <<: *app-env
+      SERVICE_NAME: gateway
+      KEY_PEPPER_FILE: /run/secrets/key_pepper
+      MASTER_KEYS_FILE: /run/secrets/master_keys
+      LOCAL_PROVIDER_HOSTS: mock_llm,ollama
+      # Headers with these prefixes are passed to the provider (the demo uses "x-mock-").
+      FORWARD_HEADER_PREFIXES: ${FORWARD_HEADER_PREFIXES:-}
+      GATEWAY_DEFAULT_RPM: ${GATEWAY_DEFAULT_RPM:-600}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 256M}
+
   # Background process of the same image: queue consumers, outbox relay, maintenance. Its own
   # HTTP port (8004, internal only) serves the health checks.
   worker:
@@ -185,6 +232,9 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     networks: [data]
+    environment:
+      # 1 = realistic delays; 0 = instant answers (used to measure the gateway's own overhead)
+      MOCK_TIME_SCALE: ${MOCK_TIME_SCALE:-1}
     deploy:
       resources:
         limits: {cpus: "0.5", memory: 128M}

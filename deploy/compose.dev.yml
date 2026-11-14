@@ -23,6 +23,10 @@ services:
     ports: ["127.0.0.1:${API_PORT:-8001}:8001"]
     networks: [data, access, egress]
 
+  gateway:
+    ports: ["127.0.0.1:${GATEWAY_PORT:-8000}:8000"]
+    networks: [data, access, egress]
+
   worker:
     ports: ["127.0.0.1:${WORKER_PORT:-8004}:8004"]
     networks: [data, access]

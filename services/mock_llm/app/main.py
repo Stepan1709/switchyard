@@ -68,6 +68,8 @@ class DroppedConnection(Exception):
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     app = FastAPI(title="Switchyard mock LLM provider")
+    # Counters for tests: did the gateway really stop a stream when its client left?
+    stats = {"requests": 0, "streams_started": 0, "streams_completed": 0, "streams_aborted": 0}
 
     async def sleep(seconds: float) -> None:
         scaled = seconds * settings.time_scale
@@ -109,6 +111,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return error(504, "Gateway timeout", "server_error")
         return None
 
+    @app.get("/_stats")
+    async def get_stats() -> dict[str, int]:
+        return stats
+
     @app.get("/health/live")
     @app.get("/health/ready")
     async def health() -> dict[str, str]:
@@ -137,6 +143,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/v1/chat/completions")
     async def chat(request: Request, body: ChatRequest) -> Any:
+        stats["requests"] += 1
         if (denied := check_auth(request)) is not None:
             return denied
         if (failure := await inject_failure(request)) is not None:
@@ -199,21 +206,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         drop = request.headers.get("x-mock-drop-after-chunks", "")
         include_usage = bool((body.stream_options or {}).get("include_usage"))
-        stream = _stream(
-            sleep,
-            model,
-            completion,
-            cid,
-            created,
-            usage,
-            include_usage,
-            int(drop) if drop.isdigit() else None,
+        stream = _counted(
+            _stream(
+                sleep,
+                model,
+                completion,
+                cid,
+                created,
+                usage,
+                include_usage,
+                int(drop) if drop.isdigit() else None,
+            ),
+            stats,
         )
         return StreamingResponse(
             stream, media_type="text/event-stream", headers={"cache-control": "no-cache"}
         )
 
     return app
+
+
+async def _counted(inner: AsyncIterator[bytes], stats: dict[str, int]) -> AsyncIterator[bytes]:
+    """Count streams that finished and streams that were cut off (client gone, drop)."""
+    stats["streams_started"] += 1
+    finished = False
+    try:
+        async for piece in inner:
+            yield piece
+        finished = True
+    finally:
+        stats["streams_completed" if finished else "streams_aborted"] += 1
 
 
 def _chunk(cid: str, created: int, model: str, delta: dict[str, Any], finish: str | None) -> bytes:

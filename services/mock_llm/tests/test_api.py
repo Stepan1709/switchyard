@@ -194,3 +194,23 @@ async def test_max_tokens_gives_finish_reason_length(client):
     )
     assert r.json()["choices"][0]["finish_reason"] == "length"
     assert r.json()["usage"]["completion_tokens"] <= 3
+
+
+async def test_stats_count_completed_and_aborted_streams(client):
+    async with client.stream("POST", "/v1/chat/completions", json=body(stream=True)) as r:
+        async for _ in r.aiter_lines():
+            pass
+    before = (await client.get("/_stats")).json()
+    assert before["streams_started"] == 1 and before["streams_completed"] == 1
+
+    with pytest.raises(Exception):  # noqa: B017 - the stream is cut on purpose
+        async with client.stream(
+            "POST",
+            "/v1/chat/completions",
+            json=body(stream=True),
+            headers={"x-mock-output-tokens": "60", "x-mock-drop-after-chunks": "2"},
+        ) as r:
+            async for _ in r.aiter_lines():
+                pass
+    after = (await client.get("/_stats")).json()
+    assert after["streams_aborted"] == 1 and after["requests"] >= 2

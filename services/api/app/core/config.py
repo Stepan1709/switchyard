@@ -127,6 +127,25 @@ class Settings(BaseSettings):
     worker_shutdown_timeout: float = 25.0
     processed_retention_days: int = 14  # how long the inbox remembers handled message ids
 
+    # Gateway (data plane). Timeouts are separate on purpose: connecting, waiting for the first
+    # byte, idle time between chunks of a stream, and the total time of one request.
+    gateway_port: int = 8000
+    gateway_max_body_bytes: int = 10 * 1024 * 1024
+    gateway_max_response_bytes: int = 16 * 1024 * 1024  # non-streaming responses only
+    gateway_default_rpm: int = 600  # for keys without their own rate_limit_rpm
+    gateway_connect_timeout: float = 3.0
+    gateway_first_byte_timeout: float = 30.0
+    gateway_idle_timeout: float = 60.0
+    gateway_total_timeout: float = 300.0
+    gateway_provider_max_concurrency: int = 200
+    gateway_provider_queue_timeout: float = 2.0
+    gateway_resolve_cache_ttl: float = 30.0
+    gateway_log_requests: bool = True
+    snapshot_refresh_seconds: float = 15.0
+    # Client headers starting with these prefixes are passed to the provider (empty by
+    # default; the demo and the tests use "x-mock-" to control the mock provider).
+    forward_header_prefixes: Annotated[list[str], NoDecode] = []
+
     # Idempotency-Key for administrator POSTs.
     idempotency_ttl_hours: int = 24
     idempotency_lock_seconds: int = 120  # an in-progress claim older than this may be taken over
@@ -158,6 +177,13 @@ class Settings(BaseSettings):
             return [h.strip().lower() for h in value.split(",") if h.strip()]
         return value
 
+    @field_validator("forward_header_prefixes", mode="before")
+    @classmethod
+    def _split_prefixes(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [h.strip().lower() for h in value.split(",") if h.strip()]
+        return value
+
     @field_validator("retry_delays_ms", mode="before")
     @classmethod
     def _split_delays(cls, value: object) -> object:
@@ -173,6 +199,14 @@ class Settings(BaseSettings):
         # Parsing validates the format and the key length; the result is built again at startup.
         from app.core.crypto import KeyRing
 
+        KeyRing.from_text(self.master_keys.get_secret_value())
+
+    def require_gateway_secrets(self) -> None:
+        """The gateway needs the key pepper and the master keys, but not the JWT secret."""
+        from app.core.crypto import KeyRing
+
+        if len(self.key_pepper.get_secret_value()) < 32:
+            raise ValueError("key_pepper must be at least 32 characters (set KEY_PEPPER_FILE)")
         KeyRing.from_text(self.master_keys.get_secret_value())
 
     @property
