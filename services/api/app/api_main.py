@@ -15,6 +15,7 @@ from app.modules.auth.router import router as auth_router
 from app.modules.health.router import router as health_router
 from app.modules.projects.router import router as projects_router
 from app.modules.registry.router import router as registry_router
+from app.modules.traffic.router import router as traffic_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -29,4 +30,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(projects_router)
     app.include_router(registry_router)
+    app.include_router(traffic_router)
     return app

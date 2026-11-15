@@ -46,6 +46,7 @@ async def ready(request: Request) -> JSONResponse:
     The body reports how fresh the snapshot is, for diagnostics.
     """
     store = _proxy(request).store
+    events = request.app.state.events
     current = store.current
     if current is None:
         return JSONResponse(
@@ -59,6 +60,12 @@ async def ready(request: Request) -> JSONResponse:
                 "version": current.snapshot.version,
                 "source": store.source,
                 "last_refresh_ok": store.last_refresh_ok,
+            },
+            "traffic_events": {
+                "connected": events.connected,
+                "buffered": events.buffered,
+                "dropped_total": events.dropped_total,
+                "published_total": events.published_total,
             },
         }
     )

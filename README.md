@@ -146,6 +146,49 @@ mock, so the difference includes the second HTTP hop.
 Streaming time to the first byte: 2.0 ms direct, 5.1 ms through the gateway (p50). With 32 concurrent clients one gateway
 process handled about 160 requests/s against about 360 for the mock itself (the load generator shares the machine).
 
+## Traffic log
+
+Every request that passes the gateway becomes one row of the `requests` table (PostgreSQL, partitioned by month):
+
+```
+gateway ── request.completed ──► RabbitMQ ──► worker (batches, ON CONFLICT DO NOTHING) ──► requests
+   └─ bounded local buffer while the broker is down (oldest events dropped and counted)
+```
+
+- The event is sent after the answer, from a background task; the client never waits for logging. If RabbitMQ is down the
+  events wait in a bounded buffer (2000 events / 64 MiB; when full the oldest are dropped and `dropped_total` grows, shown
+  in the gateway's `/health/ready`) and are delivered when the broker returns.
+- The worker writes batches of up to 100 rows in one statement. The row key is `(started_at, request_id)`, so a
+  re-delivered event changes nothing.
+- A row has metadata (task type, model, status, tokens, time to first byte, duration, gateway overhead) and, unless the
+  project says otherwise, the request and the answer as JSON. A streamed answer is stored as one assembled message.
+  Bodies over 256 KiB are not stored (the row says `payload_skipped`).
+- **Privacy, per project** (`PATCH /projects/{id}`): `store_bodies=false` keeps metadata only; `mask_pii=true` replaces
+  e-mails, phone numbers and Luhn-valid card numbers with placeholders *in the gateway, before the event is sent*, so
+  the raw values never reach the broker or the database (the client still gets the real answer).
+- **Retention**: whole monthly partitions are dropped (`TRAFFIC_RETENTION_MONTHS`, default 3: the current month and the
+  3 before it). New partitions are created ahead of time by the worker.
+- **Task types**: `x-task-type` (or the key's default) is registered automatically on first sight, up to 50 per project;
+  `GET/POST/PATCH /projects/{id}/task-types`. Only the `record` mode works so far.
+- **Reading it**: `GET /projects/{id}/requests` (filters `task_type`, `model`, `status`, `since`, `until`; keyset
+  pagination with `cursor`) and `GET /projects/{id}/requests/{request_id}` (with the stored bodies).
+
+### Query plans
+
+Indexes `(project_id, started_at DESC, request_id DESC)` and `(project_id, task_type, started_at DESC, request_id DESC)`
+serve the list view. `EXPLAIN (ANALYZE, BUFFERS)` on 300 000 generated rows in 3 monthly partitions (3 projects, one
+project holding 0.1% of the rows, 3 task types):
+
+| Query (`ORDER BY started_at DESC, request_id DESC LIMIT 51`) | Plan | Execution |
+|---|---|---|
+| project | the newest partition is read first, older partitions are `never executed` | 0.07 ms |
+| project + task type | task-type index, 51 rows from the newest partition | 0.05 ms |
+| rare project (0.1% of rows) | index-only scans over the project index, the oldest partition is skipped | 0.13 ms |
+| next page with `since`/`until` | `Subplans Removed: 4` (partition pruning), then one backward index scan | 0.08 ms |
+
+Without a time window the planner still opens every partition for planning, which is why `since`/`until` are worth
+passing on a long retention.
+
 ## Repository layout
 
 ```

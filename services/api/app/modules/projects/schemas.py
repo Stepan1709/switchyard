@@ -19,7 +19,17 @@ class ProjectOut(BaseModel):
     name: str
     description: str | None
     reference_model_id: uuid.UUID | None
+    store_bodies: bool
+    mask_pii: bool
     created_at: datetime
+
+
+class ProjectUpdate(BaseModel):
+    """Partial update of project settings (only the fields present are changed)."""
+
+    description: str | None = Field(default=None, max_length=500)
+    store_bodies: bool | None = None
+    mask_pii: bool | None = None
 
 
 class ReferenceModelSet(BaseModel):

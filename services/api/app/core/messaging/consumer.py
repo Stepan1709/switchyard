@@ -43,6 +43,10 @@ class ConsumerSpec:
     bindings: list[str]  # routing keys on the events exchange
     handler: Handler
     prefetch: int | None = None  # None = the default from settings
+    # Optional hooks for a handler that owns background work (for example a batch flusher):
+    # on_start runs before messages are taken, on_stop after the running handlers have finished.
+    on_start: Callable[[], Awaitable[None]] | None = None
+    on_stop: Callable[[], Awaitable[None]] | None = None
 
 
 @dataclass
@@ -80,6 +84,8 @@ class Consumer:
             retry_delays_ms=self.retry_delays_ms,
             delivery_limit=self.delivery_limit,
         )
+        if self.spec.on_start is not None:
+            await self.spec.on_start()
         self._tag = await self._queue.consume(self._on_message, no_ack=False)
         log.info("consumer_started", queue=self.spec.name)
 
@@ -98,6 +104,8 @@ class Consumer:
         except TimeoutError:
             finished = False
             log.warning("consumer_stop_timeout", queue=self.spec.name, inflight=self._inflight)
+        if self.spec.on_stop is not None:
+            await self.spec.on_stop()
         if self._channel is not None:
             await self._channel.close()
         log.info("consumer_stopped", queue=self.spec.name, clean=finished)

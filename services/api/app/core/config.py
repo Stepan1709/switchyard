@@ -146,6 +146,20 @@ class Settings(BaseSettings):
     # default; the demo and the tests use "x-mock-" to control the mock provider).
     forward_header_prefixes: Annotated[list[str], NoDecode] = []
 
+    # Traffic log pipeline. The gateway sends one event per finished request through a bounded
+    # local buffer (events wait there while the broker is down; the oldest are dropped when the
+    # buffer is full). The worker writes them to the partitioned `requests` table in batches.
+    request_log_queue: str = "worker.request_log"  # tests use a private queue per test
+    traffic_max_payload_bytes: int = 256 * 1024  # bigger request or response bodies are not kept
+    traffic_buffer_events: int = 2000
+    traffic_buffer_bytes: int = 64 * 1024 * 1024
+    traffic_drain_timeout: float = 5.0  # how long the gateway tries to flush on shutdown
+    traffic_batch_size: int = 100
+    traffic_batch_wait: float = 0.2  # a partial batch is written after this many seconds
+    traffic_retention_months: int = 3
+    traffic_partitions_ahead: int = 2
+    task_types_per_project: int = 50  # automatic registration stops at this many
+
     # Idempotency-Key for administrator POSTs.
     idempotency_ttl_hours: int = 24
     idempotency_lock_seconds: int = 120  # an in-progress claim older than this may be taken over

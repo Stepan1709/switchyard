@@ -43,9 +43,89 @@ def _data_json(event: bytes) -> Any:
         return None
 
 
+class StreamAssembler:
+    """Rebuilds the final answer of a streamed chat completion from its chunks.
+
+    The result has the shape of a normal (non-streaming) response, so stored answers look the
+    same whichever way the client asked for them. It stops collecting past `max_bytes`: such an
+    answer is not stored at all (a cut-off answer would be misleading), see `overflow`.
+    """
+
+    def __init__(self, max_bytes: int) -> None:
+        self._max = max_bytes
+        self._size = 0
+        self.overflow = False
+        self._meta: dict[str, Any] = {}
+        self._choices: dict[int, dict[str, Any]] = {}
+
+    def add(self, chunk: dict[str, Any]) -> None:
+        for key in ("id", "model", "created"):
+            if key in chunk and key not in self._meta:
+                self._meta[key] = chunk[key]
+        for choice in chunk.get("choices") or []:
+            index = int(choice.get("index", 0))
+            slot = self._choices.setdefault(
+                index, {"role": "assistant", "content": [], "tool_calls": {}, "finish": None}
+            )
+            delta = choice.get("delta") or {}
+            if delta.get("role"):
+                slot["role"] = delta["role"]
+            piece = delta.get("content")
+            if isinstance(piece, str) and piece:
+                self._take(len(piece))
+                if not self.overflow:
+                    slot["content"].append(piece)
+            for call in delta.get("tool_calls") or []:
+                entry = slot["tool_calls"].setdefault(
+                    int(call.get("index", 0)),
+                    {"id": None, "type": "function", "function": {"name": "", "arguments": ""}},
+                )
+                if call.get("id"):
+                    entry["id"] = call["id"]
+                function = call.get("function") or {}
+                if function.get("name"):
+                    entry["function"]["name"] += function["name"]
+                if function.get("arguments"):
+                    self._take(len(function["arguments"]))
+                    if not self.overflow:
+                        entry["function"]["arguments"] += function["arguments"]
+            if choice.get("finish_reason"):
+                slot["finish"] = choice["finish_reason"]
+
+    @property
+    def size(self) -> int:
+        return self._size
+
+    def _take(self, size: int) -> None:
+        self._size += size
+        if self._size > self._max:
+            self.overflow = True
+
+    def result(self, usage: dict[str, Any] | None) -> dict[str, Any] | None:
+        if self.overflow or not self._choices:
+            return None
+        choices = []
+        for index in sorted(self._choices):
+            slot = self._choices[index]
+            message: dict[str, Any] = {
+                "role": slot["role"],
+                "content": "".join(slot["content"]) if slot["content"] else None,
+            }
+            if slot["tool_calls"]:
+                message["tool_calls"] = [slot["tool_calls"][i] for i in sorted(slot["tool_calls"])]
+            choices.append({"index": index, "message": message, "finish_reason": slot["finish"]})
+        return {
+            **self._meta,
+            "object": "chat.completion",
+            "choices": choices,
+            "usage": usage,
+        }
+
+
 class SseFilter:
-    def __init__(self, strip_usage_chunk: bool) -> None:
+    def __init__(self, strip_usage_chunk: bool, assembler: StreamAssembler | None = None) -> None:
         self._strip = strip_usage_chunk
+        self._assembler = assembler
         self._buf = b""
         self.usage: dict[str, Any] | None = None
         self.events = 0
@@ -84,11 +164,14 @@ class SseFilter:
 
     def _inspect(self, event: bytes) -> bool:
         """Remember usage if the event carries it. True if it is a usage-only event."""
-        if b'"usage"' not in event:  # cheap test first: most events have no usage
+        # Cheap test first: without an assembler only events that mention usage are parsed.
+        if self._assembler is None and b'"usage"' not in event:
             return False
         data = _data_json(event)
         if not isinstance(data, dict):
             return False
+        if self._assembler is not None:
+            self._assembler.add(data)
         usage = data.get("usage")
         if isinstance(usage, dict):
             self.usage = usage

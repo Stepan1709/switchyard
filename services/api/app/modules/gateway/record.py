@@ -7,7 +7,7 @@ answers are never part of it. The traffic log pipeline (a later stage) plugs in 
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.core.logging import get_logger
 
@@ -37,11 +37,35 @@ class RequestRecord:
     )
     duration_ms: float | None = None
     overhead_ms: float | None = None  # gateway work before the request left for the provider
+    model_id: str | None = None
+    provider_id: str | None = None
+    # Bodies for the traffic log (None when the project does not keep them or they were too big).
+    request_payload: dict[str, Any] | None = None
+    response_payload: dict[str, Any] | None = None
+    payload_skipped: bool = False
+    payload_bytes: int = 0  # size of the stored bodies, for the event buffer's memory limit
+    mask_pii: bool = False
     extra: dict[str, object] = field(default_factory=dict)
 
 
 class Recorder(Protocol):
     def submit(self, record: RequestRecord) -> None: ...
+
+
+class CompositeRecorder:
+    """Passes a record to several recorders; one failing recorder does not stop the others."""
+
+    def __init__(self, *recorders: Recorder) -> None:
+        self._recorders = recorders
+
+    def submit(self, record: RequestRecord) -> None:
+        for recorder in self._recorders:
+            try:
+                recorder.submit(record)
+            except Exception as exc:
+                log.error(
+                    "recorder_failed", recorder=type(recorder).__name__, error=type(exc).__name__
+                )
 
 
 class LogRecorder:
