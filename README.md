@@ -189,6 +189,44 @@ project holding 0.1% of the rows, 3 task types):
 Without a time window the planner still opens every partition for planning, which is why `since`/`until` are worth
 passing on a long retention.
 
+## Calibration: replaying recorded traffic
+
+A calibration run takes a sample of the requests recorded for one task type and replays them
+on candidate models, to see what each of them would have answered, how fast, and at what price.
+
+```
+POST /projects/{id}/calibration-runs   (Idempotency-Key)
+        │  one transaction: the run, a copy of the sampled requests, one `replay.execute` job
+        │  per (request × candidate) in the outbox
+        ▼
+ RabbitMQ ──► worker: wait for a provider slot ─► reserve budget ─► call the candidate
+                      ─► store the result (price that applied, tokens, TTFT, latency)
+                      ─► the last result completes the run and emits `calibration.run.finished`
+```
+
+- **Request**: `task_type`, `candidate_model_ids`, `sample_size`, `strategy` (`random` or `stratified` by prompt length and
+  presence of tools), `source` (`traffic`, `labeled` or `both`), optional `seed`, `since`/`until`, budget
+  (`max_requests`, `max_cost_usd`) and `thresholds` for the later recommendation. The seed is stored, so a run can be
+  reproduced.
+- **Sample**: only successful requests answered by the project's reference model, with stored bodies, without duplicate
+  prompts. The sampled requests are copied into the run, so it stays complete after the traffic partition is dropped.
+- **Labelled examples**: `POST /projects/{id}/task-types/{name}/labeled-samples` takes JSON Lines
+  (`{"messages": [...], "expected": "..."}`). The import is all or nothing and skips examples that are already there.
+- **Replay**: the recorded request is sent as it was, with the model replaced, as a stream (to measure time to the first
+  token). **Tools are never executed**: tool definitions go along, and a tool call in the answer is stored, nothing more. A
+  prompt that does not fit the candidate's context is stored as `context_exceeded` and never sent.
+- **Limits per provider** (Redis, shared by all workers): a number of simultaneous calls and a call rate
+  (`calibration_max_concurrency`, `calibration_max_rps` on the provider; defaults in the settings). A slot has an expiry,
+  so a killed worker does not block a provider.
+- **Budget**: money is reserved before a call from an estimate and corrected after it; when the next call does not fit, the
+  run ends as `budget_exceeded` (it does not finish silently). The truth is in the database; Redis counters are rebuilt from
+  it if they are lost.
+- **Steering**: `POST .../pause`, `.../resume`, `.../cancel`; progress is `GET .../calibration-runs/{id}`
+  (counters per status, spent money, remaining budget); results are `GET .../results` (filters, keyset paging).
+- **Failures**: a slow or overloaded provider is retried with growing delays and, when the retries are used up, recorded
+  as an error result so the run can still finish. A killed worker loses nothing: its unacknowledged jobs go to another worker,
+  and a result per `(run, request, model)` is unique.
+
 ## Repository layout
 
 ```

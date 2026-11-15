@@ -16,6 +16,8 @@ class ProviderCreate(BaseModel):
     is_local: bool = False
     # SecretStr: never printed by repr or logs, never serialised back.
     api_key: SecretStr | None = Field(default=None, max_length=512)
+    calibration_max_concurrency: int | None = Field(default=None, gt=0, le=1000)
+    calibration_max_rps: Decimal | None = Field(default=None, gt=0, le=10_000, decimal_places=2)
 
 
 class ProviderUpdate(BaseModel):
@@ -26,6 +28,8 @@ class ProviderUpdate(BaseModel):
     enabled: bool | None = None
     api_key: SecretStr | None = Field(default=None, max_length=512)
     clear_api_key: bool = False
+    calibration_max_concurrency: int | None = Field(default=None, gt=0, le=1000)
+    calibration_max_rps: Decimal | None = Field(default=None, gt=0, le=10_000, decimal_places=2)
 
 
 class ProviderOut(BaseModel):
@@ -42,6 +46,8 @@ class ProviderOut(BaseModel):
     last_check_ok: bool | None
     last_check_latency_ms: int | None
     last_check_error: str | None
+    calibration_max_concurrency: int | None
+    calibration_max_rps: Decimal | None
     created_at: datetime
 
 

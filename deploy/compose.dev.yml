@@ -29,7 +29,7 @@ services:
 
   worker:
     ports: ["127.0.0.1:${WORKER_PORT:-8004}:8004"]
-    networks: [data, access]
+    networks: [data, access, egress]
 
   mock_llm:
     ports: ["127.0.0.1:${MOCK_LLM_PORT:-8003}:8003"]

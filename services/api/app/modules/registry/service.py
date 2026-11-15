@@ -83,6 +83,8 @@ class ProviderService:
             base_url=data.base_url.strip().rstrip("/"),
             auth_type=data.auth_type,
             is_local=data.is_local,
+            calibration_max_concurrency=data.calibration_max_concurrency,
+            calibration_max_rps=data.calibration_max_rps,
         )
         if key:
             self._set_key(provider, key)

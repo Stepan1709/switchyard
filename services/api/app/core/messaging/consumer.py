@@ -2,6 +2,7 @@
 
 Message life cycle (see also retry.py):
   handler returns            -> ack
+  Deferred                   -> copy to Q.retry.1 with the retry counter unchanged, then ack
   TemporaryError             -> copy to Q.retry.<n> (delay grows with n), then ack the original;
                                 after the last retry the copy goes to Q.dlq instead
   PermanentError / unknown   -> copy to Q.dlq with the reason in its headers, then ack
@@ -147,7 +148,13 @@ class Consumer:
     ) -> None:
         decision = retry.decide(exc, message.attempt, len(self.retry_delays_ms))
         try:
-            if decision.action == "retry":
+            if decision.action == "defer":
+                # Back through the first retry queue with the SAME attempt number.
+                await self.publisher.publish_dlx(
+                    self._names.retry(1), message, extra_headers={H_RETRY: message.attempt}
+                )
+                log.debug("message_deferred", queue=self.spec.name, message_id=message.message_id)
+            elif decision.action == "retry":
                 n = decision.next_attempt
                 await self.publisher.publish_dlx(
                     self._names.retry(n),

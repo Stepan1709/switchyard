@@ -12,6 +12,7 @@ from app.core.lifespan import make_lifespan
 from app.core.logging import configure_logging
 from app.core.middleware import CorrelationIdMiddleware
 from app.modules.auth.router import router as auth_router
+from app.modules.calibration.router import router as calibration_router
 from app.modules.health.router import router as health_router
 from app.modules.projects.router import router as projects_router
 from app.modules.registry.router import router as registry_router
@@ -31,4 +32,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(projects_router)
     app.include_router(registry_router)
     app.include_router(traffic_router)
+    app.include_router(calibration_router)
     return app

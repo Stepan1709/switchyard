@@ -214,7 +214,8 @@ async def test_stored_responses_never_contain_provider_secrets(client, root, api
     body = {"name": "mock", "base_url": mock_llm.base_url, "is_local": True, "api_key": MOCK_KEY}
     await client.post("/providers", json=body, headers={**root, "Idempotency-Key": key()})
     async with api_app.state.resources.session_factory() as s:
-        stored = str((await s.execute(text("SELECT response FROM idempotency_keys"))).all())
+        rows = await s.execute(text("SELECT response::text FROM idempotency_keys"))
+        stored = " ".join(r[0] for r in rows)  # the whole JSON, not a shortened repr
     assert MOCK_KEY not in stored and "****" in stored  # only the mask was stored
 
 
