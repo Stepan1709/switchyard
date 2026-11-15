@@ -20,7 +20,7 @@ from app.modules.auth.service import normalize_email
 from app.modules.projects import keys
 from app.modules.projects.models import ApiKey, Project
 from app.modules.projects.repository import ProjectRepository
-from app.modules.projects.schemas import KeyCreate, KeyUpdate, ProjectCreate
+from app.modules.projects.schemas import KeyCreate, KeyUpdate, ProjectCreate, ProjectUpdate
 from app.modules.registry.repository import RegistryRepository
 
 
@@ -56,6 +56,31 @@ class ProjectService:
             ip=ip,
         )
         await self.session.commit()
+        return project
+
+    async def update_project(
+        self, admin: Admin, project_id: uuid.UUID, data: ProjectUpdate, ip: str | None
+    ) -> Project:
+        project = await self._project(admin, project_id)
+        changes = data.model_dump(exclude_unset=True)
+        for field, value in changes.items():
+            if field != "description" and value is None:
+                continue  # the flags are not nullable: null means "leave as it is"
+            setattr(project, field, value)
+        audit.record(
+            self.session,
+            action="project.update",
+            actor_id=admin.id,
+            target_type="project",
+            target_id=project_id,
+            details={
+                "fields": sorted(changes),
+                **{k: v for k, v in changes.items() if isinstance(v, bool)},
+            },
+            ip=ip,
+        )
+        await self.session.commit()
+        await self.session.refresh(project)
         return project
 
     async def list_projects(self, admin: Admin) -> list[Project]:

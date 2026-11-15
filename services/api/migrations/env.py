@@ -23,13 +23,22 @@ def _url() -> str:
 
 
 def run_migrations_offline() -> None:
-    context.configure(url=_url(), target_metadata=target_metadata, literal_binds=True)
+    context.configure(
+        url=_url(),
+        target_metadata=target_metadata,
+        literal_binds=True,
+        include_object=db_models.include_object,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def _do_run(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_object=db_models.include_object,
+    )
     with context.begin_transaction():
         context.run_migrations()
 

@@ -86,7 +86,8 @@ async def test_the_request_is_recorded_with_metadata_only(gw, stack):
     assert (
         rec.ttft_ms is not None and rec.duration_ms >= rec.ttft_ms and rec.overhead_ms is not None
     )
-    assert "secret prompt" not in repr(rec)  # no content in the record
+    # the record carries the bodies for the traffic log (the project keeps them by default) ...
+    assert rec.request_payload["messages"][0]["content"] == "a secret prompt"
 
 
 async def test_the_provider_key_is_sent_decrypted_and_never_returned(gw, stack):
@@ -502,3 +503,12 @@ async def test_each_request_gets_its_own_id(gw, stack):
     )
     assert r.headers["x-request-id"] != "attacker-chosen"
     assert isinstance(httpx.Headers(r.headers), httpx.Headers)
+
+
+async def test_request_log_lines_never_contain_prompts_or_answers(gw, stack, caplog):
+    from app.modules.gateway.record import LogRecorder
+
+    await post(gw, stack.key, chat_body("a very private prompt"))
+    LogRecorder().submit(gw.recorder.last)  # what the gateway writes to its log for this request
+    out = caplog.text  # structlog writes through the stdlib logging handlers
+    assert "gateway_request" in out and "a very private prompt" not in out

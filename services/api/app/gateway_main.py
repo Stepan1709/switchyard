@@ -18,9 +18,10 @@ from app.core.crypto import KeyRing
 from app.core.logging import configure_logging, get_logger
 from app.core.snapshot import SnapshotStore
 from app.modules.gateway.errors import GatewayError
+from app.modules.gateway.events import TrafficEventPublisher
 from app.modules.gateway.proxy import GatewayProxy
 from app.modules.gateway.ratelimit import RateLimiter
-from app.modules.gateway.record import LogRecorder, Recorder
+from app.modules.gateway.record import CompositeRecorder, LogRecorder, Recorder
 from app.modules.gateway.router import router
 
 log = get_logger(__name__)
@@ -66,6 +67,8 @@ def create_app(
             KeyRing.from_text(settings.master_keys.get_secret_value()),
             refresh_seconds=settings.snapshot_refresh_seconds,
         )
+        events = TrafficEventPublisher(settings)
+        app.state.events = events
         app.state.settings = settings
         app.state.engine = engine  # exposed so tests can count database statements
         app.state.proxy = GatewayProxy(
@@ -73,16 +76,20 @@ def create_app(
             store,
             http,
             RateLimiter(redis),
-            recorder or LogRecorder(settings.gateway_log_requests),
+            recorder or CompositeRecorder(LogRecorder(settings.gateway_log_requests), events),
             resolver or ssrf.CachingResolver(settings.gateway_resolve_cache_ttl),
         )
         await store.refresh()  # so that the first request already finds a snapshot
         refresher = asyncio.create_task(store.run(), name="snapshot-refresh")
+        sender = asyncio.create_task(events.run(), name="traffic-events")
         log.info("gateway_started", snapshot=store.current is not None)
         try:
             yield
         finally:
             log.info("gateway_stopping")
+            await events.stop()  # try to flush buffered events before the connections close
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait_for(sender, 5)
             store.stop()
             refresher.cancel()
             with contextlib.suppress(asyncio.CancelledError):

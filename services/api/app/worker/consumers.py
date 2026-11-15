@@ -1,13 +1,23 @@
-"""The list of queue consumers the worker runs.
-
-Empty for now: real consumers (traffic log writer, replay, judge ...) are added together with
-the features that need them. Each one is a ConsumerSpec(queue name, routing keys, handler).
-"""
+"""The queue consumers the worker runs. Each is a ConsumerSpec(queue, routing keys, handler)."""
 
 from app.core.config import Settings
+from app.core.events import REQUEST_COMPLETED
 from app.core.messaging import ConsumerSpec
 from app.core.resources import Resources
+from app.modules.traffic.writer import RequestLogWriter
+
+
+def request_log_spec(writer: RequestLogWriter, settings: Settings) -> ConsumerSpec:
+    return ConsumerSpec(
+        settings.request_log_queue,
+        [REQUEST_COMPLETED],
+        writer.handle,
+        # Enough messages in flight to fill a batch: they wait for the batch to be written.
+        prefetch=settings.traffic_batch_size * 2,
+        on_start=writer.start,
+        on_stop=writer.stop,
+    )
 
 
 def build_consumers(res: Resources, settings: Settings) -> list[ConsumerSpec]:
-    return []
+    return [request_log_spec(RequestLogWriter(res.session_factory, settings), settings)]

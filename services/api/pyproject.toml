@@ -61,6 +61,8 @@ disallow_untyped_decorators = false
 disallow_untyped_calls = false
 warn_return_any = false
 disallow_any_generics = false
+# Tests index into optional JSON and use values they just created.
+disable_error_code = ["index", "union-attr"]
 disallow_incomplete_defs = false
 check_untyped_defs = true
 

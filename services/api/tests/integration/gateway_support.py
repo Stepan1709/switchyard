@@ -104,7 +104,7 @@ async def provision(
 class GatewayHandle:
     app: FastAPI
     client: httpx.AsyncClient
-    recorder: CollectingRecorder
+    recorder: CollectingRecorder | None
 
     async def refresh(self) -> None:
         """Rebuild the snapshot now instead of waiting for the periodic refresh."""
@@ -114,8 +114,11 @@ class GatewayHandle:
         return {"authorization": f"Bearer {key}"}
 
 
-async def run_gateway(settings: Settings, **overrides: Any) -> AsyncIterator[GatewayHandle]:
-    recorder = CollectingRecorder()
+async def run_gateway(
+    settings: Settings, *, collect: bool = True, **overrides: Any
+) -> AsyncIterator[GatewayHandle]:
+    """Run a gateway. With collect=False it uses the real recorder (logs and traffic events)."""
+    recorder = CollectingRecorder() if collect else None
     updates = {
         "service_name": "gateway",
         "forward_header_prefixes": ["x-mock-"],

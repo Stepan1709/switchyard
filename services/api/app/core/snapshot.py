@@ -67,6 +67,8 @@ class ProjectInfo:
     project_id: str
     name: str
     reference: RouteTarget | None  # None until an administrator sets a usable reference model
+    store_bodies: bool = True  # keep prompts and answers in the traffic log
+    mask_pii: bool = False  # mask e-mails, phones and cards in what is kept
 
 
 @dataclass(frozen=True)
@@ -93,6 +95,8 @@ class Snapshot:
                     project_id=p["project_id"],
                     name=p["name"],
                     reference=RouteTarget(**p["reference"]) if p["reference"] else None,
+                    store_bodies=p.get("store_bodies", True),
+                    mask_pii=p.get("mask_pii", False),
                 )
                 for pid, p in data["projects"].items()
             },
@@ -108,7 +112,7 @@ def _version_of(content: dict[str, Any]) -> str:
 _KEYS_SQL = text(
     """
     SELECT k.id, k.prefix, k.secret_hash, k.project_id, k.default_task_type, k.rate_limit_rpm,
-           p.name AS project_name, p.reference_model_id
+           p.name AS project_name, p.reference_model_id, p.store_bodies, p.mask_pii
     FROM api_keys k JOIN projects p ON p.id = k.project_id
     WHERE k.revoked_at IS NULL
     """
@@ -163,6 +167,8 @@ async def build_snapshot(session: AsyncSession) -> Snapshot:
             project_id=pid,
             name=k["project_name"],
             reference=targets.get(str(ref)) if ref else None,
+            store_bodies=k["store_bodies"],
+            mask_pii=k["mask_pii"],
         )
 
     model_names = tuple(sorted(names))

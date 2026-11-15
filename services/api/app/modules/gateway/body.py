@@ -21,6 +21,8 @@ class PreparedBody:
     # True when the client did NOT ask for usage in the stream and the gateway injected the
     # option itself: the extra usage-only chunk must then be removed from the stream.
     strip_usage_chunk: bool
+    # The request as the client sent it (before the model is replaced), for the traffic log.
+    original: dict[str, Any]
 
 
 def prepare_body(raw: bytes, target_model: str) -> PreparedBody:
@@ -37,6 +39,7 @@ def prepare_body(raw: bytes, target_model: str) -> PreparedBody:
             400, "'stream' must be a boolean.", "invalid_request_error", "invalid_stream"
         )
 
+    original = dict(data)  # shallow copy: replacing keys below does not touch it
     requested = data.get("model")
     data["model"] = target_model
 
@@ -56,4 +59,5 @@ def prepare_body(raw: bytes, target_model: str) -> PreparedBody:
         stream=stream,
         requested_model=requested if isinstance(requested, str) else None,
         strip_usage_chunk=strip,
+        original=original,
     )

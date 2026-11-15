@@ -34,7 +34,7 @@ from app.modules.gateway.body import PreparedBody, prepare_body
 from app.modules.gateway.errors import GatewayError
 from app.modules.gateway.ratelimit import RateLimiter, RateResult
 from app.modules.gateway.record import Recorder, RequestRecord
-from app.modules.gateway.sse import SseFilter
+from app.modules.gateway.sse import SseFilter, StreamAssembler
 from app.modules.projects import keys as client_keys
 
 log = get_logger(__name__)
@@ -193,12 +193,23 @@ class GatewayProxy:
                 if target is None:
                     raise errors.no_reference_model()
                 rec.model, rec.provider = target.model_name, target.provider_name
+                rec.model_id, rec.provider_id = target.model_id, target.provider_id
+                rec.mask_pii = project.mask_pii
                 base_headers["x-switchyard-model"] = target.model_name
 
                 prepared = prepare_body(raw, target.model_name)
                 rec.stream, rec.requested_model = prepared.stream, prepared.requested_model
+                capture = project.store_bodies
+                if capture:
+                    # A body bigger than the limit is not kept at all: a cut-off prompt or
+                    # answer is useless for replaying and misleading to read.
+                    if len(raw) <= self.settings.traffic_max_payload_bytes:
+                        rec.request_payload = prepared.original
+                        rec.payload_bytes = len(raw)
+                    else:
+                        rec.payload_skipped = True
                 return await self._forward(
-                    request, live, target, prepared, rec, base_headers, started
+                    request, live, target, prepared, rec, base_headers, started, capture
                 )
             except GatewayError as exc:
                 rec.status = (
@@ -222,6 +233,7 @@ class GatewayProxy:
         rec: RequestRecord,
         base_headers: dict[str, str],
         started: float,
+        capture: bool,
     ) -> Response:
         sem = self._semaphore(target.provider_id)
         try:
@@ -250,7 +262,9 @@ class GatewayProxy:
         )
 
         if is_stream:
-            return self._stream_response(upstream, prepared, rec, base_headers, started, release)
+            return self._stream_response(
+                upstream, prepared, rec, base_headers, started, release, capture
+            )
 
         # Non-streaming answer, or an error answer: read it whole (bounded), then close.
         try:
@@ -261,7 +275,9 @@ class GatewayProxy:
         finally:
             await upstream.aclose()
         release()
-        return self._plain_response(upstream, body, content_type, rec, base_headers, started)
+        return self._plain_response(
+            upstream, body, content_type, rec, base_headers, started, capture
+        )
 
     async def _send(
         self,
@@ -347,11 +363,14 @@ class GatewayProxy:
         rec: RequestRecord,
         base_headers: dict[str, str],
         started: float,
+        capture: bool,
     ) -> Response:
         status = upstream.status_code
         if status >= 400 and status not in _PASSTHROUGH:
             log.warning("upstream_error", provider=rec.provider, http_status=status)
             rec.status, rec.error_code = "upstream_error", "upstream_error"
+            rec.http_status = 502  # what the client received, not the provider's own status
+            rec.extra["upstream_status"] = status
             self._finish(rec, started)
             return errors.upstream_failed(status).response(base_headers)
 
@@ -362,10 +381,17 @@ class GatewayProxy:
             rec.status = "rate_limited" if status == 429 else "error"
         else:
             rec.status = "ok"
-            usage = _usage_of(body)
-            if usage:
+            data = _json_object(body)
+            usage = data.get("usage") if data else None
+            if isinstance(usage, dict):
                 rec.prompt_tokens = usage.get("prompt_tokens")
                 rec.completion_tokens = usage.get("completion_tokens")
+            if capture:
+                if data is not None and len(body) <= self.settings.traffic_max_payload_bytes:
+                    rec.response_payload = data
+                    rec.payload_bytes += len(body)
+                else:
+                    rec.payload_skipped = True
         rec.ttft_ms = _ms(started)  # non-streaming: first byte and last byte coincide
         self._finish(rec, started)
         return Response(
@@ -383,6 +409,7 @@ class GatewayProxy:
         base_headers: dict[str, str],
         started: float,
         release: Any,
+        capture: bool,
     ) -> StreamingResponse:
         settings = self.settings
         finalized = False
@@ -404,9 +431,16 @@ class GatewayProxy:
             if sse.usage:
                 rec.prompt_tokens = sse.usage.get("prompt_tokens")
                 rec.completion_tokens = sse.usage.get("completion_tokens")
+            if assembler is not None and rec.status == "ok":
+                if assembler.overflow:
+                    rec.payload_skipped = True
+                else:
+                    rec.response_payload = assembler.result(sse.usage)
+                    rec.payload_bytes += assembler.size
             self._finish(rec, started)
 
-        sse = SseFilter(prepared.strip_usage_chunk)
+        assembler = StreamAssembler(settings.traffic_max_payload_bytes) if capture else None
+        sse = SseFilter(prepared.strip_usage_chunk, assembler)
 
         async def pump() -> AsyncIterator[bytes]:
             rec.status = "client_disconnected"  # until proven otherwise
@@ -445,13 +479,12 @@ def _error_event(message: str, code: str) -> bytes:
     return f"data: {json.dumps(body)}\n\n".encode()
 
 
-def _usage_of(body: bytes) -> dict[str, Any] | None:
+def _json_object(body: bytes) -> dict[str, Any] | None:
     try:
         data = json.loads(body)
     except ValueError:
         return None
-    usage = data.get("usage") if isinstance(data, dict) else None
-    return usage if isinstance(usage, dict) else None
+    return data if isinstance(data, dict) else None
 
 
 def models_response(live: LiveSnapshot) -> JSONResponse:

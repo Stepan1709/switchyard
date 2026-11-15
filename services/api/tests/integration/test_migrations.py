@@ -50,7 +50,12 @@ async def _schema_diff(url: str) -> list[object]:
         async with engine.connect() as conn:
 
             def compare(sync_conn):
-                return compare_metadata(MigrationContext.configure(sync_conn), Base.metadata)
+                return compare_metadata(
+                    MigrationContext.configure(
+                        sync_conn, opts={"include_object": db_models.include_object}
+                    ),
+                    Base.metadata,
+                )
 
             return list(await conn.run_sync(compare))
     finally:

@@ -2,7 +2,16 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,6 +28,11 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     created_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("admins.id", ondelete="SET NULL")
     )
+    # Traffic privacy, per project. store_bodies=false keeps only metadata (ids, timings, token
+    # counts), never prompts or answers. mask_pii=true replaces e-mails, phone numbers and card
+    # numbers in the stored bodies with placeholders (the client still gets the real answer).
+    store_bodies: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    mask_pii: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     # The reference model: in record mode all traffic goes to it and its answers are the
     # baseline that cheaper models are compared with. Cleared if the model is ever deleted.
     reference_model_id: Mapped[uuid.UUID | None] = mapped_column(

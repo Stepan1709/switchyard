@@ -29,6 +29,7 @@ from app.core.logging import configure_logging, get_logger
 from app.core.messaging import Consumer, ConsumerSpec, Publisher
 from app.core.outbox import OutboxRelay
 from app.core.resources import Resources, open_resources
+from app.modules.traffic import partitions
 
 log = get_logger(__name__)
 
@@ -82,7 +83,19 @@ async def _maintenance(res: Resources, settings: Settings, stop: asyncio.Event) 
         try:
             keys = await purge_expired(res.session_factory)
             inbox = await purge_processed(res.session_factory, settings.processed_retention_days)
-            log.info("maintenance_done", idempotency_keys=keys, processed_messages=inbox)
+            created = await partitions.ensure_window(
+                res.session_factory, ahead=settings.traffic_partitions_ahead
+            )
+            dropped = await partitions.drop_expired(
+                res.session_factory, retention_months=settings.traffic_retention_months
+            )
+            log.info(
+                "maintenance_done",
+                idempotency_keys=keys,
+                processed_messages=inbox,
+                partitions=len(created),
+                partitions_dropped=dropped,
+            )
         except Exception as exc:
             log.error("maintenance_failed", error=type(exc).__name__)
         with contextlib.suppress(TimeoutError):
@@ -107,6 +120,10 @@ async def run_worker(
     res = await open_resources(settings)
     state = WorkerState()
     publisher = await Publisher.create(res.amqp_channel)
+    try:  # the table must have somewhere to put today's rows before the first event arrives
+        await partitions.ensure_window(res.session_factory, ahead=settings.traffic_partitions_ahead)
+    except Exception as exc:
+        log.error("partition_setup_failed", error=type(exc).__name__)
     try:
         for spec in specs_factory(res, settings):
             consumer = Consumer(

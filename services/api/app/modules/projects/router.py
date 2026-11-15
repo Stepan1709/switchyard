@@ -20,6 +20,7 @@ from app.modules.projects.schemas import (
     MemberOut,
     ProjectCreate,
     ProjectOut,
+    ProjectUpdate,
     ReferenceModelSet,
 )
 from app.modules.projects.service import ProjectService
@@ -60,6 +61,19 @@ async def get_project(
     project_id: uuid.UUID, admin: CurrentAdmin, service: ServiceDep
 ) -> ProjectOut:
     return ProjectOut.model_validate(await service.get_project(admin, project_id))
+
+
+@router.patch("/{project_id}", response_model=ProjectOut)
+async def update_project(
+    project_id: uuid.UUID,
+    body: ProjectUpdate,
+    request: Request,
+    admin: AdminOnly,
+    service: ServiceDep,
+) -> ProjectOut:
+    """Change project settings: `store_bodies` and `mask_pii` control what the traffic log keeps."""
+    project = await service.update_project(admin, project_id, body, client_ip(request))
+    return ProjectOut.model_validate(project)
 
 
 @router.put("/{project_id}/reference-model", response_model=ProjectOut)
