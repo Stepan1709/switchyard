@@ -3,18 +3,20 @@
 from dataclasses import dataclass
 
 from app.core.messaging.envelope import InvalidMessage
-from app.core.messaging.errors import PermanentError, TemporaryError
+from app.core.messaging.errors import Deferred, PermanentError, TemporaryError
 
 
 @dataclass(frozen=True)
 class Decision:
-    action: str  # "retry" | "dead_letter"
+    action: str  # "retry" | "defer" | "dead_letter"
     reason: str
     next_attempt: int = 0  # for "retry": 1-based number of the retry queue to use
 
 
 def decide(exc: BaseException, attempt: int, max_retries: int) -> Decision:
     """`attempt` is how many retries already happened; `max_retries` is the retry queue count."""
+    if isinstance(exc, Deferred):
+        return Decision("defer", "deferred", attempt)  # same attempt: not counted as a failure
     if isinstance(exc, TemporaryError):
         if attempt < max_retries:
             return Decision("retry", "temporary", attempt + 1)

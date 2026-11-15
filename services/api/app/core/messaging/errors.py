@@ -25,3 +25,9 @@ class UnroutableError(PublishError):
     With a mandatory publish the broker returns such a message instead of dropping it silently.
     It is not an outage: nobody is subscribed (yet).
     """
+
+
+class Deferred(Exception):
+    """Not a failure: "not now". The message comes back after the first retry delay and the
+    retry counter is NOT increased, so waiting for a busy provider or a paused run never uses
+    up the retries meant for real errors."""

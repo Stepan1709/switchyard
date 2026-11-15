@@ -160,6 +160,23 @@ class Settings(BaseSettings):
     traffic_partitions_ahead: int = 2
     task_types_per_project: int = 50  # automatic registration stops at this many
 
+    # Calibration (replaying recorded requests on candidate models).
+    replay_queue: str = "worker.replay"  # tests use a private queue per test
+    run_finished_queue: str = "worker.calibration_finished"
+    replay_prefetch: int = 8
+    calibration_max_sample_size: int = 2000
+    calibration_max_candidates: int = 10
+    calibration_pool_limit: int = 20_000  # rows read to pick a sample from (their ids and features)
+    calibration_default_concurrency: int = 4  # per provider, when the provider sets no limit
+    calibration_default_rps: float = 5.0  # per provider, when the provider sets no limit
+    calibration_limit_wait: float = 3.0  # how long a job waits for a provider slot before deferral
+    calibration_slot_ttl: float = 180.0  # a slot of a dead worker is freed after this long
+    calibration_first_byte_timeout: float = 60.0
+    calibration_total_timeout: float = 180.0
+    calibration_default_max_tokens: int = 1024  # assumed answer length when a request sets none
+    calibration_import_max_bytes: int = 5 * 1024 * 1024
+    calibration_import_max_lines: int = 5000
+
     # Idempotency-Key for administrator POSTs.
     idempotency_ttl_hours: int = 24
     idempotency_lock_seconds: int = 120  # an in-progress claim older than this may be taken over

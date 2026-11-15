@@ -12,6 +12,7 @@ from typing import Any
 from app.core import idempotency, inbox, outbox
 from app.modules.audit import models as audit_models
 from app.modules.auth import models as auth_models
+from app.modules.calibration import models as calibration_models
 from app.modules.projects import models as projects_models
 from app.modules.registry import models as registry_models
 from app.modules.traffic import models as traffic_models
@@ -22,6 +23,7 @@ ALL_MODEL_MODULES: tuple[ModuleType, ...] = (
     outbox,
     audit_models,
     auth_models,
+    calibration_models,
     projects_models,
     registry_models,
     traffic_models,

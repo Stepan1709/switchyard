@@ -209,10 +209,20 @@ services:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
       rabbitmq: {condition: service_healthy}
+    # Calibration replays call providers, so the worker decrypts their keys (master_keys) and
+    # may reach external APIs (egress) and the local ones (mock_llm, ollama).
+    secrets:
+      - postgres_password
+      - redis_password
+      - rabbitmq_password
+      - master_keys
+    networks: [data, egress]
     environment:
       <<: *app-env
       SERVICE_NAME: worker
       WORKER_PORT: "8004"
+      MASTER_KEYS_FILE: /run/secrets/master_keys
+      LOCAL_PROVIDER_HOSTS: mock_llm,ollama
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8004/health/ready', timeout=2)"]
       interval: 10s

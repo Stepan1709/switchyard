@@ -29,7 +29,16 @@ class Provider(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """An OpenAI-compatible endpoint (a cloud API or a self-hosted server)."""
 
     __tablename__ = "providers"
-    __table_args__ = (CheckConstraint("auth_type in ('bearer', 'none')", name="auth_type"),)
+    __table_args__ = (
+        CheckConstraint("auth_type in ('bearer', 'none')", name="auth_type"),
+        CheckConstraint(
+            "calibration_max_concurrency is null or calibration_max_concurrency > 0",
+            name="calibration_concurrency",
+        ),
+        CheckConstraint(
+            "calibration_max_rps is null or calibration_max_rps > 0", name="calibration_rps"
+        ),
+    )
 
     name: Mapped[str] = mapped_column(String(100), unique=True)
     base_url: Mapped[str] = mapped_column(String(500))
@@ -44,6 +53,10 @@ class Provider(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     last_check_ok: Mapped[bool | None] = mapped_column(Boolean)
     last_check_latency_ms: Mapped[int | None] = mapped_column(Integer)
     last_check_error: Mapped[str | None] = mapped_column(String(300))
+    # Limits for calibration replays (null = the defaults from the settings). They protect a
+    # small self-hosted server from being flooded and a paid API from rate-limit errors.
+    calibration_max_concurrency: Mapped[int | None] = mapped_column(Integer)
+    calibration_max_rps: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
 
 
 class Model(UUIDPrimaryKeyMixin, TimestampMixin, Base):
