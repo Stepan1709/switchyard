@@ -29,6 +29,11 @@ class RunCreate(BaseModel):
     max_requests: int | None = Field(default=None, gt=0)
     max_cost_usd: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=6)
     thresholds: Thresholds = Thresholds()
+    # The judge that grades answers that differ from the truth. Optional: without it only the
+    # deterministic checks (and equality with the reference) are used. It must be neither a
+    # candidate nor the reference. `judge_pairwise` compares two answers in both orders.
+    judge_model_id: uuid.UUID | None = None
+    judge_pairwise: bool = False
 
 
 class RunProgress(BaseModel):
@@ -40,6 +45,12 @@ class RunProgress(BaseModel):
     spent_usd: Decimal
     remaining_requests: int | None
     remaining_usd: Decimal | None
+
+
+class EvaluationProgress(BaseModel):
+    status: str  # pending (the run has not ended) | running | done
+    total: int  # answers to evaluate
+    done: int
 
 
 class RunOut(BaseModel):
@@ -60,9 +71,12 @@ class RunOut(BaseModel):
     max_requests: int | None
     max_cost_usd: Decimal | None
     thresholds: dict[str, Any]
+    judge_model_id: uuid.UUID | None
+    judge_pairwise: bool
     created_at: datetime
     finished_at: datetime | None
     progress: RunProgress | None = None
+    evaluation: EvaluationProgress | None = None
 
 
 class ResultOut(BaseModel):

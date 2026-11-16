@@ -227,6 +227,47 @@ POST /projects/{id}/calibration-runs   (Idempotency-Key)
   as an error result so the run can still finish. A killed worker loses nothing: its unacknowledged jobs go to another worker,
   and a result per `(run, request, model)` is unique.
 
+### Quality evaluation
+
+When a run ends, every successful answer is evaluated. The question it answers is honest and limited:
+**how closely does this model behave like the reference on this kind of request** (or like a hand-labelled example, when
+there is one). It is not an absolute measure of correctness, and the report always says what an answer was compared with.
+
+Order of evaluation, from cheap and certain to expensive:
+
+1. **Checks of the task type** (`POST /projects/{id}/task-types/{name}/checks`): `json_schema`, `exact_match`, `regex`,
+   `tool_call_match` (the same tools with equal arguments; tools are compared, never executed), `llm_judge` (tunes the judge:
+   minimum score, rubric). A check is *required* (a failure means "not passed") or optional (it only lowers the quality).
+   `json_schema` supports a documented subset of JSON Schema and refuses anything else when it is configured.
+2. **An answer equal to the truth** (labelled example first, then the reference's recorded answer) scores 1.0 and the judge
+   is **not called**. The judge only sees answers that differ.
+3. **The judge** (`judge_model_id` of the run; never a candidate, never the reference): grades the answer 1-5 against the
+   truth, or with `judge_pairwise` compares the two answers in both orders (a judge that contradicts itself between the orders
+   is position-biased and does not pass the answer). Temperature 0, a JSON reply validated by Pydantic, two repeats when
+   the reply is invalid, then `judge_failed`: such an answer is left out of the statistics and counted separately (it is
+   not a zero). Everything the candidate wrote goes between markers with a value it could not know, and the prompt, stored
+   in the database by version, tells the judge to treat it as data.
+
+Quality is on a 0-1 scale: a check counts 0 or 1, the judge counts (score - 1) / 4, quality is their mean. Hand-written
+verdicts of people get a table now and outrank the judge once an interface fills it.
+
+`GET .../calibration-runs/{id}/aggregates` returns, per model: quality (mean and lowest decile), pass rate with its Wilson
+interval, tokens, latency p50/p95, time to first token, error rate, share of schema-valid answers, cost per request and the
+judge's own cost. Fewer than 30 evaluated answers are marked `insufficient_data`. Example (60 recorded requests of a
+classification task, `mock-strong` as the reference, `exact_match` check and a judge; the mock models have accuracies of
+0.60 and 0.85):
+
+| model | evaluated | quality | lowest decile | pass rate (95% interval) | same as reference | judge calls | cost per request |
+|---|---|---|---|---|---|---|---|
+| mock-tiny | 60 | 0.71 | 0.11 | 0.63 (0.51-0.74) | 38 | 22 | $0.0000028 |
+| mock-mid | 60 | 0.88 | 0.38 | 0.83 (0.72-0.91) | 50 | 10 | $0.0000139 |
+
+The judge was asked 32 times for 120 answers: the 88 answers equal to the reference needed no judge.
+
+Limits worth knowing: if the reference is wrong, the candidates are measured against its mistakes (labelled examples and user
+feedback are the counterweight); a different but equally valid sequence of tool calls is not credited automatically; and the
+effect of an action is never checked, only the decision.
+
 ## Repository layout
 
 ```

@@ -24,6 +24,7 @@ from app.modules.calibration.lifecycle import ACTIVE, complete_if_done, finish_r
 from app.modules.calibration.models import CalibrationRun, RunSample
 from app.modules.calibration.repository import CalibrationRepository
 from app.modules.calibration.schemas import (
+    EvaluationProgress,
     ImportReport,
     ResultOut,
     ResultPage,
@@ -134,6 +135,7 @@ class CalibrationService:
         if reference_id in candidate_ids:
             raise Unprocessable("The reference model cannot be its own candidate")
         await self._check_candidates(candidate_ids)
+        await self._check_judge(data, candidate_ids, reference_id)
 
         seed = data.seed if data.seed is not None else random.SystemRandom().randrange(2**31)
         pool: list[sampling.PoolItem] = []
@@ -170,6 +172,9 @@ class CalibrationService:
             max_requests=data.max_requests,
             max_cost_usd=data.max_cost_usd,
             thresholds=data.thresholds.model_dump(exclude_none=True),
+            judge_model_id=data.judge_model_id,
+            judge_pairwise=data.judge_pairwise,
+            evaluation_status="pending",
             created_by_id=admin.id,
         )
         self.session.add(run)
@@ -205,6 +210,29 @@ class CalibrationService:
         )
         await self.session.commit()
         return await self._out(run)
+
+    async def _check_judge(
+        self, data: RunCreate, candidate_ids: list[uuid.UUID], reference_id: uuid.UUID
+    ) -> None:
+        if data.judge_model_id is None:
+            if data.judge_pairwise:
+                raise Unprocessable("judge_pairwise needs a judge_model_id")
+            return
+        judge = data.judge_model_id
+        # A model must not judge itself (it would favour its own style), and the reference is
+        # the yardstick, not a referee of its own answers.
+        if judge in candidate_ids:
+            raise Unprocessable("The judge must not be one of the candidate models")
+        if judge == reference_id:
+            raise Unprocessable("The judge must not be the reference model")
+        found = await self.repo.candidates([judge])
+        model = found.get(judge)
+        if model is None:
+            raise Unprocessable("Unknown judge model")
+        if not (model.enabled and model.provider_enabled):
+            raise Unprocessable("The judge model is disabled")
+        if judge not in await self.repo.models_with_prices([judge], datetime.now(UTC)):
+            raise Unprocessable("The judge model has no current price")
 
     async def _check_candidates(self, candidate_ids: list[uuid.UUID]) -> None:
         found = await self.repo.candidates(candidate_ids)
@@ -273,6 +301,11 @@ class CalibrationService:
     async def _out(self, run: CalibrationRun) -> RunOut:
         out = RunOut.model_validate(run)
         out.progress = await self._progress(run)
+        out.evaluation = EvaluationProgress(
+            status=run.evaluation_status,
+            total=run.evaluation_total,
+            done=await self.repo.count_evaluations(run.id),
+        )
         return out
 
     async def list_runs(self, admin: Admin, project_id: uuid.UUID, limit: int) -> list[RunOut]:

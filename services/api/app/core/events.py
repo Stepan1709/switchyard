@@ -14,6 +14,7 @@ REQUEST_COMPLETED = "request.completed"
 # Calibration: a command (one replay job) and an event (a run reached an end state).
 REPLAY_EXECUTE = "replay.execute"
 CALIBRATION_RUN_FINISHED = "calibration.run.finished"
+JUDGE_EXECUTE = "judge.execute"  # evaluate one replay result (checks and, if needed, the judge)
 
 
 class RequestCompleted(BaseModel):

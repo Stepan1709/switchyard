@@ -7,14 +7,16 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
 from sqlalchemy import text
 
 from app.core.messaging import Consumer
 from app.core.messaging.topology import QueueNames
 from app.core.outbox import OutboxRelay
 from app.modules.calibration.executor import ReplayExecutor
-from app.worker.consumers import replay_spec, run_finished_spec
-from tests.integration.conftest import wait_until
+from app.modules.evaluation.evaluator import EvaluationStarter, Evaluator
+from app.worker.consumers import judge_spec, replay_spec, run_finished_spec
+from tests.integration.conftest import MOCK_KEY, wait_until
 from tests.integration.gateway_support import Provisioned, provision
 from tests.integration.test_traffic_api import insert_rows
 
@@ -165,7 +167,12 @@ class Pipeline:
     async def start(self) -> "Pipeline":
         res = self.api_app.state.resources
         executor = ReplayExecutor(res, self.settings, self.api_app.state.keyring)
-        for spec in (replay_spec(executor, self.settings), run_finished_spec(self.settings)):
+        specs = (
+            replay_spec(executor, self.settings),
+            run_finished_spec(EvaluationStarter(res, self.settings), self.settings),
+            judge_spec(Evaluator(res, self.settings, self.api_app.state.keyring), self.settings),
+        )
+        for spec in specs:
             consumer = Consumer(
                 spec, self.amqp, self.publisher, retry_delays_ms=self.settings.retry_delays_ms
             )
@@ -186,7 +193,7 @@ class Pipeline:
 
 async def delete_queues(amqp, settings) -> None:
     channel = await amqp.channel()
-    for name in (settings.replay_queue, settings.run_finished_queue):
+    for name in (settings.replay_queue, settings.run_finished_queue, settings.judge_queue):
         names = QueueNames(name)
         for q in [names.work, names.dlq, *(names.retry(i) for i in (1, 2, 3))]:
             await channel.queue_delete(q)
@@ -194,3 +201,84 @@ async def delete_queues(amqp, settings) -> None:
 
 def jobs_of(payloads: list[Any]) -> list[dict[str, Any]]:
     return [p if isinstance(p, dict) else json.loads(p) for p in payloads]
+
+
+async def add_traffic_from_mock(
+    api_app, env: Env, mock_base_url: str, n: int, *, task_type: str = "classification",
+    extra: dict[str, Any] | None = None, prefix: str = "Review",
+) -> None:  # fmt: skip
+    """Record traffic the way the gateway would: the answers are really given by mock-strong."""
+    rows = []
+    async with httpx.AsyncClient() as http:
+        for i in range(len(env.prompts), len(env.prompts) + n):
+            prompt = f"{prefix} number {i}: classify the sentiment of this text about product {i}"
+            env.prompts.append(prompt)
+            body = {
+                "model": "mock-strong",
+                "messages": [{"role": "user", "content": prompt}],
+                **(extra or {}),
+            }
+            r = await http.post(
+                f"{mock_base_url}/chat/completions",
+                json=body,
+                headers={"authorization": f"Bearer {MOCK_KEY}"},
+            )
+            assert r.status_code == 200, r.text
+            data = r.json()
+            rows.append(
+                {
+                    "task_type": task_type,
+                    "model_id": uuid.UUID(env.reference_id),
+                    "request_payload": body,
+                    "response_payload": data,
+                    "prompt_tokens": data["usage"]["prompt_tokens"],
+                    "completion_tokens": data["usage"]["completion_tokens"],
+                }
+            )
+    await insert_rows(api_app, env.project_id, rows)
+
+
+async def add_judge(client, admin, env: Env) -> str:
+    judge = await add_model(
+        client, admin, env.stack.provider["id"], "mock-judge", context_window=32_768
+    )
+    await set_price(client, admin, judge, "1.0", "2.0")
+    env.candidates["judge"] = judge
+    return judge
+
+
+async def add_check(client, env: Env, kind: str, config: dict | None = None, **extra: Any) -> dict:
+    r = await client.post(
+        f"/projects/{env.project_id}/task-types/classification/checks",
+        json={"kind": kind, "config": config or {}, **extra},
+        headers=env.admin,
+    )
+    assert r.status_code == 201, r.text
+    body: dict = r.json()
+    return body
+
+
+async def wait_evaluated(client, env: Env, run_id: str, timeout: float = 60):  # noqa: ASYNC109
+    async def done():
+        return (await get_run(client, env, run_id))["evaluation"]["status"] == "done"
+
+    await wait_until(done, timeout=timeout)
+    return await get_run(client, env, run_id)
+
+
+async def aggregates(client, env: Env, run_id: str) -> dict[str, Any]:
+    r = await client.get(
+        f"/projects/{env.project_id}/calibration-runs/{run_id}/aggregates", headers=env.admin
+    )
+    assert r.status_code == 200, r.text
+    body: dict[str, Any] = r.json()
+    return body
+
+
+async def evaluations(api_app, run_id: str) -> list[Any]:
+    return await sql(
+        api_app,
+        "SELECT e.*, r.model_id, r.request_id FROM evaluations e JOIN run_results r"
+        " ON r.id = e.result_id WHERE e.run_id = :r",
+        r=uuid.UUID(run_id),
+    )

@@ -177,6 +177,14 @@ class Settings(BaseSettings):
     calibration_import_max_bytes: int = 5 * 1024 * 1024
     calibration_import_max_lines: int = 5000
 
+    # Quality evaluation of replayed answers (checks and the LLM judge).
+    judge_queue: str = "worker.judge"  # tests use a private queue per test
+    judge_prefetch: int = 8
+    judge_max_tokens: int = 400
+    judge_invalid_retries: int = 2  # re-asks when the judge's reply is not the agreed JSON
+    judge_text_limit: int = 6000  # characters of the request or an answer shown to the judge
+    calibration_min_samples: int = 30  # fewer evaluated answers = "not enough data"
+
     # Idempotency-Key for administrator POSTs.
     idempotency_ttl_hours: int = 24
     idempotency_lock_seconds: int = 120  # an in-progress claim older than this may be taken over

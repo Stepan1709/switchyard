@@ -81,6 +81,9 @@ def _pick_label(model: MockModel, key: str) -> str:
 
 
 def _judge(key: str) -> str:
+    if "TASK: PAIRWISE COMPARISON" in key:  # two answers in, a winner out
+        winner = ("A", "B", "tie")[_h("pair", key) % 3]
+        return json.dumps({"winner": winner, "rationale": f"deterministic mock winner {winner}"})
     score = 1 + _h("judge", key) % 5
     verdict = "pass" if score >= 4 else "fail"
     return json.dumps(

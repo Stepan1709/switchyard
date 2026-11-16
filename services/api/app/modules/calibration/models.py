@@ -70,6 +70,9 @@ class CalibrationRun(UUIDPrimaryKeyMixin, Base):
         CheckConstraint("strategy in ('random', 'stratified')", name="strategy"),
         CheckConstraint("source in ('traffic', 'labeled', 'both')", name="source"),
         CheckConstraint("sample_size > 0", name="sample_positive"),
+        CheckConstraint(
+            "evaluation_status in ('pending', 'running', 'done')", name="evaluation_status"
+        ),
         Index("ix_calibration_runs_project_created", "project_id", "created_at"),
     )
 
@@ -93,6 +96,16 @@ class CalibrationRun(UUIDPrimaryKeyMixin, Base):
     # Budget: replay calls and money. null = unlimited.
     max_requests: Mapped[int | None] = mapped_column(Integer)
     max_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
+    # Evaluation of the answers. The judge (optional) is a model that is neither a candidate nor
+    # the reference. `pairwise` makes it compare two answers in both orders instead of grading
+    # the candidate against the reference.
+    judge_model_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("models.id", ondelete="SET NULL")
+    )
+    judge_pairwise: Mapped[bool] = mapped_column(default=False, server_default="false")
+    # pending (the run has not ended) -> running (judge.execute jobs are out) -> done
+    evaluation_status: Mapped[str] = mapped_column(String(16), default="pending")
+    evaluation_total: Mapped[int] = mapped_column(Integer, default=0)  # answers to evaluate
     # Thresholds for the recommendation (stage 9): quality, latency, errors.
     thresholds: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_by_id: Mapped[uuid.UUID | None] = mapped_column(
