@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en" class="h-full bg-slate-50">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false}'>
+  <title>{% block title %}{{ page|capitalize or "Switchyard" }}{% endblock %} · Switchyard</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/vendor/htmx.min.js" defer></script>
+  <script src="/static/vendor/chart.umd.js" defer></script>
+  <script src="/static/js/app.js" defer></script>
+  <script src="/static/js/matrix.js" defer></script>
+  <script src="/static/vendor/alpine.min.js" defer></script>
+</head>
+<body class="min-h-full text-slate-800" hx-boost="true" hx-headers='{"x-csrf-token": "{{ csrf }}"}'>
+{% block shell %}
+<header class="border-b border-slate-200 bg-white" x-data="{ open: false }">
+  <div class="mx-auto flex max-w-7xl items-center gap-4 px-4 py-2">
+    <a href="/overview" class="text-base font-bold text-brand-700">Switchyard</a>
+    <button class="btn btn-sm lg:hidden" type="button" @click="open = !open" aria-label="Menu">Menu</button>
+    <nav class="hidden flex-1 flex-wrap gap-1 lg:flex" :class="{ '!flex w-full flex-col': open }">
+      {% for key, label, href in nav %}
+      <a href="{{ href }}" class="rounded-md px-2.5 py-1.5 text-sm font-medium {% if page == key %}bg-brand-50 text-brand-700{% else %}text-slate-600 hover:bg-slate-100{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </nav>
+    <div class="ml-auto flex items-center gap-3">
+      {% if projects %}
+      <form method="post" action="/project/select" class="flex items-center">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="next" value="{{ request.url.path }}">
+        <select name="project_id" class="input !w-auto py-1" aria-label="Project" @change="$el.form.requestSubmit()">
+          {% for p in projects %}
+          <option value="{{ p.id }}" {% if project and p.id == project.id %}selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      {% endif %}
+      <span class="hidden text-xs text-slate-500 sm:inline">{{ session.email }}
+        <span class="badge {% if session.is_admin %}badge-blue{% else %}badge-gray{% endif %}">{{ session.role }}</span></span>
+      <form method="post" action="/logout" hx-boost="false">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button class="btn btn-sm" type="submit">Sign out</button>
+      </form>
+    </div>
+  </div>
+</header>
+
+<main class="mx-auto max-w-7xl px-4 py-6">
+  <div id="flash" aria-live="polite" class="mb-4 space-y-2">
+    {% for f in flashes %}
+    <div class="rounded-md border px-3 py-2 text-sm {% if f.kind == 'error' %}border-red-200 bg-red-50 text-red-800{% else %}border-emerald-200 bg-emerald-50 text-emerald-800{% endif %}" role="status">{{ f.text }}</div>
+    {% endfor %}
+  </div>
+  {% block content %}{% endblock %}
+</main>
+{% endblock %}
+</body>
+</html>

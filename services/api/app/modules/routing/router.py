@@ -9,6 +9,7 @@ from app.core.deps import SessionDep
 from app.modules.auth.deps import AdminOnly, CurrentAdmin, IdempotencyDep, SettingsDep, client_ip
 from app.modules.routing.schemas import (
     ActivateRequest,
+    MatrixOut,
     ProposeRequest,
     RecommendationOut,
     RuleCreate,
@@ -24,6 +25,12 @@ def get_service(session: SessionDep, settings: SettingsDep) -> RoutingService:
 
 
 ServiceDep = Annotated[RoutingService, Depends(get_service)]
+
+
+@router.get("/matrix", response_model=MatrixOut)
+async def matrix(project_id: uuid.UUID, admin: CurrentAdmin, service: ServiceDep) -> MatrixOut:
+    """Models x task types from the newest evaluated run of every task type."""
+    return await service.matrix(admin, project_id)
 
 
 @router.get("/calibration-runs/{run_id}/recommendation", response_model=RecommendationOut)

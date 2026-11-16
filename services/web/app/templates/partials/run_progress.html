@@ -1,0 +1,34 @@
+{% from "macros.html" import status_badge, csrf_field %}
+{% set p = run.progress %}
+{% set ev = run.evaluation %}
+<div id="run-progress" class="card"
+     {% if live %}hx-get="/runs/{{ run.id }}/progress" hx-trigger="every 3s" hx-swap="outerHTML" hx-boost="false"{% endif %}>
+  <div class="mb-3 flex flex-wrap items-center gap-3">
+    <h2 class="card-title !mb-0">Progress</h2>
+    {{ status_badge(run.status) }}
+    {% if run.status_reason %}<span class="text-xs text-slate-500">{{ run.status_reason }}</span>{% endif %}
+    {% if ev %}<span class="text-xs text-slate-500">evaluation: {{ status_badge(ev.status) }} {% if ev.total %}{{ ev.done }} / {{ ev.total }}{% endif %}</span>{% endif %}
+    {% if can_write and run.status in ("running", "paused") %}
+    <div class="ml-auto flex gap-2">
+      {% if run.status == "running" %}
+      <form method="post" action="/runs/{{ run.id }}/pause" hx-boost="false">{{ csrf_field() }}<button class="btn btn-sm" type="submit">Pause</button></form>
+      {% else %}
+      <form method="post" action="/runs/{{ run.id }}/resume" hx-boost="false">{{ csrf_field() }}<button class="btn btn-sm" type="submit">Resume</button></form>
+      {% endif %}
+      <form method="post" action="/runs/{{ run.id }}/cancel" hx-boost="false">{{ csrf_field() }}<button class="btn btn-sm btn-danger" type="submit">Cancel</button></form>
+    </div>
+    {% endif %}
+  </div>
+  {% if p %}
+  <div class="h-3 w-full overflow-hidden rounded bg-slate-100" role="progressbar" aria-valuenow="{{ p.percent|round|int }}" aria-valuemin="0" aria-valuemax="100">
+    <div class="h-3 bg-brand-500" style="width: {{ [p.percent, 100]|min }}%"></div>
+  </div>
+  <div class="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+    <div><span class="text-xs text-slate-500">Done</span><div class="font-semibold">{{ p.finished }} / {{ p.total_jobs }} ({{ p.percent|decimal(0) }}%)</div></div>
+    <div><span class="text-xs text-slate-500">Provider calls</span><div class="font-semibold">{{ p.calls }}{% if p.remaining_requests is not none %} <span class="text-xs font-normal text-slate-500">({{ p.remaining_requests }} left)</span>{% endif %}</div></div>
+    <div><span class="text-xs text-slate-500">Spent</span><div class="font-semibold">{{ p.spent_usd|money }}{% if p.remaining_usd is not none %} <span class="text-xs font-normal text-slate-500">({{ p.remaining_usd|money }} left)</span>{% endif %}</div></div>
+    <div><span class="text-xs text-slate-500">Results</span>
+      <div class="text-xs">{% for k, v in p.by_status.items() %}<span class="mr-2">{{ k|replace("_", " ") }}: <strong>{{ v }}</strong></span>{% endfor %}</div></div>
+  </div>
+  {% endif %}
+</div>

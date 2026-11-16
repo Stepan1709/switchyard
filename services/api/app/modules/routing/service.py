@@ -27,9 +27,19 @@ from app.modules.calibration.models import CalibrationRun
 from app.modules.calibration.repository import CalibrationRepository
 from app.modules.evaluation.repository import EvaluationRepository
 from app.modules.projects.repository import ProjectRepository
+from app.modules.registry.repository import RegistryRepository
 from app.modules.routing import recommend as rec
 from app.modules.routing.models import MAX_CHAIN, RoutingRule
-from app.modules.routing.schemas import CriteriaOut, RecommendationOut, RuleOut, VerdictOut
+from app.modules.routing.schemas import (
+    CriteriaOut,
+    MatrixCell,
+    MatrixColumn,
+    MatrixModel,
+    MatrixOut,
+    RecommendationOut,
+    RuleOut,
+    VerdictOut,
+)
 from app.modules.traffic.models import TaskType
 
 
@@ -51,6 +61,7 @@ class RoutingService:
         self.projects = ProjectRepository(session)
         self.calibration = CalibrationRepository(session)
         self.evaluation = EvaluationRepository(session)
+        self.registry = RegistryRepository(session)
 
     # ---- lookups ----
     async def _check_project(self, admin: Admin, project_id: uuid.UUID) -> None:
@@ -204,6 +215,87 @@ class RoutingService:
             verdicts=verdicts,
             notes=result.notes,
         )
+
+    async def matrix(self, admin: Admin, project_id: uuid.UUID) -> MatrixOut:
+        """Every registered model against every task type of the project. A cell is filled when
+        the newest evaluated run of that task type included the model."""
+        project = await self.projects.get_for_admin(project_id, admin.id)
+        if project is None:
+            raise NotFound("Project not found")
+        tasks = (
+            (
+                await self.session.execute(
+                    select(TaskType)
+                    .where(TaskType.project_id == project_id)
+                    .order_by(TaskType.name)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        runs = {r.task_type: r for r in await self.calibration.latest_evaluated_runs(project_id)}
+        columns: list[MatrixColumn] = []
+        cells: list[MatrixCell] = []
+        for task in tasks:
+            active = await self._active(project_id, task.name)
+            run = runs.get(task.name)
+            column = MatrixColumn(
+                task_type=task.name,
+                mode=task.mode,
+                run_id=run.id if run else None,
+                run_finished_at=run.finished_at if run else None,
+                criteria=None,
+                primary=None,
+                active_version=active.version if active else None,
+                active_chain=list(active.chain) if active else [],
+            )
+            columns.append(column)
+            if run is None:
+                continue
+            recommendation = await self.recommendation(admin, project_id, run.id)
+            column.criteria = recommendation.criteria
+            column.primary = recommendation.primary
+            rows = {r.model_id: r for r in await self.evaluation.list_aggregates(run.id)}
+            for verdict in recommendation.verdicts:
+                row = rows.get(verdict.model_id)
+                if row is None:
+                    continue
+                cells.append(
+                    MatrixCell(
+                        task_type=task.name,
+                        model_id=verdict.model_id,
+                        run_id=run.id,
+                        eligible=verdict.eligible,
+                        reasons=verdict.reasons,
+                        is_primary=verdict.model_id == recommendation.primary,
+                        in_active_rule=active is not None and verdict.model_id in active.chain,
+                        insufficient_data=row.insufficient_data,
+                        n_total=row.n_total,
+                        n_evaluated=row.n_evaluated,
+                        quality_mean=row.quality_mean,
+                        pass_rate=row.pass_rate,
+                        pass_rate_low=row.pass_rate_low,
+                        pass_rate_high=row.pass_rate_high,
+                        prompt_tokens_avg=row.prompt_tokens_avg,
+                        completion_tokens_avg=row.completion_tokens_avg,
+                        latency_p50_ms=row.latency_p50_ms,
+                        latency_p95_ms=row.latency_p95_ms,
+                        error_rate=row.error_rate,
+                        cost_per_request_usd=row.cost_per_request_usd,
+                    )
+                )
+        models = [
+            MatrixModel(
+                id=m.id,
+                name=m.name,
+                tier=m.tier,
+                cost_type=m.cost_type,
+                enabled=m.enabled,
+                is_reference=m.id == project.reference_model_id,
+            )
+            for m in await self.registry.list_models()
+        ]
+        return MatrixOut(models=models, columns=columns, cells=cells)
 
     async def propose_from_run(
         self,

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% from "macros.html" import stat, empty %}
+{% block content %}
+<h1 class="mb-4 text-xl font-semibold">Feedback</h1>
+
+{% if report.ratings == 0 and not items %}
+{% call empty("No ratings yet", "Applications send a like or dislike with POST /v1/feedback and the x-request-id of the answer.") %}{% endcall %}
+{% else %}
+<div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+  {{ stat("Ratings", report.ratings|num) }}
+  {{ stat("Dislikes", report.dislikes|num, ((report.dislikes / report.ratings)|pct ~ " of ratings") if report.ratings else "") }}
+</div>
+
+{% for h in health %}
+<div class="mt-4 rounded-lg border px-4 py-3 text-sm {% if h.suggest_rollback %}border-amber-300 bg-amber-50{% else %}border-slate-200 bg-white{% endif %}">
+  <strong>{{ h.task_type }}</strong> · rule v{{ h.rule_version }} since {{ h.activated_at|dt }}:
+  {% if h.suggest_rollback %}<span class="badge badge-amber">consider a rollback</span>{% else %}<span class="badge badge-green">looks fine</span>{% endif %}
+  <div class="mt-1 text-slate-600">{{ h.reason }}</div>
+  <div class="mt-1 text-xs text-slate-500">Since: {{ h.dislikes_since }} of {{ h.ratings_since }} disliked ({{ h.dislike_rate_since|pct }}); before: {{ h.dislikes_before }} of {{ h.ratings_before }} ({{ h.dislike_rate_before|pct }}).
+    {% if can_write and h.suggest_rollback %}<a class="underline" href="/rules#{{ h.task_type }}">Open the rules</a>{% endif %}</div>
+</div>
+{% endfor %}
+
+<section class="card mt-4 overflow-x-auto">
+  <h2 class="card-title">Dislikes by model and task type</h2>
+  {% if report.groups %}
+  <table class="table">
+    <thead><tr><th>Model</th><th>Task type</th><th class="num">Ratings</th><th class="num">Dislikes</th><th class="num">Dislike rate</th><th>95% interval</th></tr></thead>
+    <tbody>
+    {% for g in report.groups %}
+      <tr><td class="font-medium">{{ g.model or "?" }}</td><td>{{ g.task_type or "(none)" }}</td><td class="num">{{ g.ratings }}</td><td class="num">{{ g.dislikes }}</td>
+          <td class="num">{{ g.dislike_rate|pct }}</td><td class="text-xs text-slate-500">{{ g.dislike_rate_low|pct }} – {{ g.dislike_rate_high|pct }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="hint">Few ratings mean a wide interval: do not draw conclusions from a handful of votes.</p>
+  {% else %}<p class="text-sm text-slate-500">Nothing to group yet.</p>{% endif %}
+</section>
+
+<section class="card mt-4 overflow-x-auto">
+  <div class="mb-3 flex items-center justify-between">
+    <h2 class="card-title !mb-0">Latest ratings</h2>
+    <div class="flex gap-1 text-xs">
+      <a class="btn btn-sm {% if rating is none %}btn-primary{% endif %}" href="/feedback">All</a>
+      <a class="btn btn-sm {% if rating == -1 %}btn-primary{% endif %}" href="/feedback?rating=-1">Dislikes</a>
+      <a class="btn btn-sm {% if rating == 1 %}btn-primary{% endif %}" href="/feedback?rating=1">Likes</a>
+    </div>
+  </div>
+  {% if items %}
+  <table class="table">
+    <thead><tr><th>When</th><th>Rating</th><th>Model</th><th>Task type</th><th>Comment</th><th>Request</th></tr></thead>
+    <tbody>
+    {% for i in items %}
+      <tr><td class="whitespace-nowrap">{{ i.updated_at|dt }}</td>
+          <td>{% if i.rating < 0 %}<span class="badge badge-red">dislike</span>{% else %}<span class="badge badge-green">like</span>{% endif %}</td>
+          <td>{{ i.model or "?" }}</td><td>{{ i.task_type or "(none)" }}</td><td>{{ i.comment or "" }}</td>
+          <td class="font-mono text-xs text-slate-500">{{ i.request_id|short }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="text-sm text-slate-500">No ratings with this filter.</p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

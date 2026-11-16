@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% from "macros.html" import empty, chart, csrf_field %}
+{% block content %}
+<div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+  <h1 class="text-xl font-semibold">Usage and idle servers</h1>
+  <div class="flex items-center gap-2 text-sm">
+    {% for d in (7, 30, 90) %}
+    <a class="btn btn-sm {% if d == days %}btn-primary{% endif %}" href="/usage?days={{ d }}">{{ d }} days</a>
+    {% endfor %}
+    {% if can_write %}
+    <form method="post" action="/usage/recompute" class="inline">{{ csrf_field() }}<input type="hidden" name="days" value="{{ days if days <= 90 else 90 }}">
+      <button class="btn btn-sm" type="submit" title="Recalculate the daily summaries from the traffic log">Recalculate</button></form>
+    {% endif %}
+  </div>
+</div>
+
+{% if not daily %}
+{% call empty("No traffic in the last " ~ days ~ " days", "Summaries are built from the traffic log every few minutes.") %}{% endcall %}
+{% else %}
+<div class="grid gap-4 lg:grid-cols-2">
+  <section class="card"><h2 class="card-title">Cost by day</h2>{{ chart("usage-cost", cost_chart) }}</section>
+  <section class="card"><h2 class="card-title">Requests by day</h2>{{ chart("usage-requests", requests_chart) }}</section>
+</div>
+
+<div class="mt-4 grid gap-4 lg:grid-cols-3">
+  <section class="card"><h2 class="card-title">Share by model</h2>{{ chart("usage-models", model_chart) }}</section>
+  <section class="card overflow-x-auto lg:col-span-2">
+    <h2 class="card-title">By task type</h2>
+    <table class="table">
+      <thead><tr><th>Task type</th><th class="num">Requests</th><th class="num">Errors</th><th class="num">Tokens in / out</th><th class="num">Cost</th><th class="num">Reference</th></tr></thead>
+      <tbody>
+      {% for r in by_task %}
+        <tr><td class="font-medium">{{ r.task_type or "(none)" }}</td><td class="num">{{ r.requests|num }}</td><td class="num">{{ r.errors|num }}</td>
+            <td class="num">{{ r.prompt_tokens|num }} / {{ r.completion_tokens|num }}</td><td class="num">{{ r.cost_usd|money }}</td><td class="num">{{ r.reference_cost_usd|money }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endif %}
+
+<section class="card mt-6 overflow-x-auto">
+  <div class="mb-3 flex items-center justify-between">
+    <h2 class="card-title !mb-0">Own servers, {{ month }}</h2>
+  </div>
+  {% if servers %}
+  <table class="table">
+    <thead><tr><th>Model</th><th>Load</th><th class="num">Busy</th><th class="num">Requests</th><th class="num">Monthly price</th><th class="num">Per request</th><th class="num">Idle cost</th></tr></thead>
+    <tbody>
+    {% for s in servers %}
+      <tr>
+        <td class="font-medium">{{ s.name }} {% if s.idle %}<span class="badge badge-amber">idle</span>{% endif %}</td>
+        <td class="w-48">
+          <div class="relative h-2 w-full overflow-hidden rounded bg-slate-100">
+            <div class="h-2 {% if s.idle %}bg-amber-500{% else %}bg-emerald-500{% endif %}" style="width: {{ [s.utilization_pct, 100]|min }}%"></div>
+          </div>
+          <span class="text-xs text-slate-500">{{ s.utilization_pct|pct_points }} (idle below {{ s.idle_threshold_pct|pct_points(0) }})</span>
+        </td>
+        <td class="num">{{ (s.busy_seconds / 3600)|decimal(1) }} h</td>
+        <td class="num">{{ s.requests|num }}</td>
+        <td class="num">{{ s.monthly_cost_usd|money }}</td>
+        <td class="num">{{ s.effective_cost_per_request_usd|money }}</td>
+        <td class="num {% if s.idle_cost_usd and s.idle_cost_usd|float > 0 %}text-amber-700{% endif %}">{{ s.idle_cost_usd|money }}</td>
+      </tr>
+      <tr><td colspan="7" class="!border-0 !pt-0 text-xs text-slate-500">
+        Busy time by source: live {{ (s.busy_by_source_seconds.live / 3600)|decimal(1) }} h · calibration {{ (s.busy_by_source_seconds.calibration / 3600)|decimal(1) }} h · shadow {{ (s.busy_by_source_seconds.shadow / 3600)|decimal(1) }} h
+      </td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="hint">Load is the share of time the model handled at least one request (parallel requests are not added up). A GPU with batching may have spare capacity even when it is "busy", so treat it as an upper bound.</p>
+  {% else %}
+  <p class="text-sm text-slate-500">No models with a monthly price. Register a self-hosted model with <em>fixed monthly</em> cost to see its load here.</p>
+  {% endif %}
+</section>
+{% endblock %}

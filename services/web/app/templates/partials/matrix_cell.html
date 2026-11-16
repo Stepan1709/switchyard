@@ -1,0 +1,74 @@
+{% from "macros.html" import csrf_field %}
+{% set a = aggregate %}
+<div class="space-y-4 p-4">
+  <div>
+    <h2 class="text-lg font-semibold">{{ model_name }} <span class="text-slate-400">on</span> {{ task_type }}</h2>
+    {% if verdict %}
+    <p class="mt-1 text-sm">
+      {% if verdict.eligible %}<span class="badge badge-green">meets the thresholds</span>
+      {% else %}<span class="badge badge-red">rejected</span> <span class="text-slate-600">{{ verdict.reasons|join("; ") }}</span>{% endif %}
+      {% if a.insufficient_data %}<span class="badge badge-amber">too few examples</span>{% endif %}
+    </p>
+    {% endif %}
+    <p class="hint">Thresholds of this run: pass rate ≥ {{ criteria.min_pass_rate|pct(0) }}{% if criteria.min_quality is not none %}, quality ≥ {{ criteria.min_quality|decimal }}{% endif %}{% if criteria.max_p95_ms %}, p95 ≤ {{ criteria.max_p95_ms|ms }}{% endif %}, errors ≤ {{ criteria.max_error_rate|pct(0) }}.</p>
+  </div>
+
+  <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
+    <div><dt class="text-xs text-slate-500">Pass rate</dt><dd class="font-semibold">{{ a.pass_rate|pct }} <span class="text-xs font-normal text-slate-500">({{ a.pass_rate_low|pct(0) }}–{{ a.pass_rate_high|pct(0) }})</span></dd></div>
+    <div><dt class="text-xs text-slate-500">Quality (mean / lowest decile)</dt><dd class="font-semibold">{{ a.quality_mean|decimal }} / {{ a.quality_p10|decimal }}</dd></div>
+    <div><dt class="text-xs text-slate-500">Rated answers</dt><dd class="font-semibold">{{ a.n_evaluated }} of {{ a.n_total }}</dd></div>
+    <div><dt class="text-xs text-slate-500">Cost per request</dt><dd class="font-semibold">{{ a.cost_per_request_usd|money }}</dd></div>
+    <div><dt class="text-xs text-slate-500">Tokens in / out</dt><dd class="font-semibold">{{ a.prompt_tokens_avg|num }} / {{ a.completion_tokens_avg|num }}</dd></div>
+    <div><dt class="text-xs text-slate-500">Valid by schema</dt><dd class="font-semibold">{{ a.valid_rate|pct }}</dd></div>
+    <div><dt class="text-xs text-slate-500">Latency p50 / p95</dt><dd class="font-semibold">{{ a.latency_p50_ms|ms }} / {{ a.latency_p95_ms|ms }}</dd></div>
+    <div><dt class="text-xs text-slate-500">First token p50 / p95</dt><dd class="font-semibold">{{ a.ttft_p50_ms|ms }} / {{ a.ttft_p95_ms|ms }}</dd></div>
+    <div><dt class="text-xs text-slate-500">Errors / context exceeded</dt><dd class="font-semibold">{{ a.error_rate|pct }} / {{ a.n_context_exceeded }}</dd></div>
+    {% if a.valid_args_rate is not none %}<div><dt class="text-xs text-slate-500">Valid tool arguments</dt><dd class="font-semibold">{{ a.valid_args_rate|pct }}</dd></div>{% endif %}
+    {% if a.n_sessions %}<div><dt class="text-xs text-slate-500">Whole conversations passed</dt><dd class="font-semibold">{{ a.n_sessions_passed }} of {{ a.n_sessions }} ({{ a.session_pass_rate|pct(0) }})</dd></div>{% endif %}
+    {% if a.n_judge_failed %}<div><dt class="text-xs text-slate-500">Judge failures</dt><dd class="font-semibold">{{ a.n_judge_failed }}</dd></div>{% endif %}
+  </dl>
+
+  <section>
+    <h3 class="card-title">Examples (failed first)</h3>
+    {% if not examples %}<p class="text-sm text-slate-500">No evaluated answers to show.</p>{% endif %}
+    <div class="space-y-3">
+    {% for ex in examples %}
+      {% set e = ex.evaluation %}
+      <article class="rounded-md border border-slate-200 p-3 text-sm">
+        <div class="mb-2 flex flex-wrap items-center gap-2">
+          {% if e.passed %}<span class="badge badge-green">passed</span>{% elif e.passed is none %}<span class="badge badge-gray">{{ e.status|replace("_", " ") }}</span>{% else %}<span class="badge badge-red">failed</span>{% endif %}
+          {% if e.quality is not none %}<span class="text-xs text-slate-500">quality {{ e.quality|decimal }}</span>{% endif %}
+          <span class="text-xs text-slate-500">decided by: {{ e.basis|replace("_", " ") }}</span>
+          {% if ex.error %}<span class="badge badge-red">{{ ex.error }}</span>{% endif %}
+        </div>
+        <div class="text-xs font-semibold uppercase text-slate-500">Question</div>
+        <pre class="whitespace-pre-wrap break-words rounded bg-slate-50 p-2 text-xs">{{ ex.prompt or "(not stored)" }}</pre>
+        <div class="mt-2 grid gap-2 sm:grid-cols-2">
+          <div><div class="text-xs font-semibold uppercase text-slate-500">Reference answer</div>
+            <pre class="whitespace-pre-wrap break-words rounded bg-slate-50 p-2 text-xs">{{ ex.reference or "(none)" }}</pre></div>
+          <div><div class="text-xs font-semibold uppercase text-slate-500">This model</div>
+            <pre class="whitespace-pre-wrap break-words rounded bg-slate-50 p-2 text-xs">{{ ex.candidate or "(none)" }}</pre></div>
+        </div>
+        {% if e.checks %}
+        <ul class="mt-2 space-y-0.5 text-xs">
+          {% for c in e.checks %}<li>{% if c.get("passed") %}✓{% else %}✗{% endif %} {{ c.get("kind", "check") }}{% if c.get("detail") %}: {{ c.get("detail") }}{% endif %}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        {% if e.judge_rationale %}<p class="mt-2 text-xs text-slate-600"><strong>Judge{% if e.judge_score %} ({{ e.judge_score }}/5){% endif %}:</strong> {{ e.judge_rationale }}</p>{% endif %}
+        {% if can_write %}
+        <div class="mt-2 flex items-center gap-2" id="verdict-{{ ex.result_id }}">
+          <span class="text-xs text-slate-500">Your verdict outranks the judge:</span>
+          {% for v in ("pass", "fail") %}
+          <form hx-post="/matrix/verdict" hx-target="#verdict-{{ ex.result_id }}" hx-swap="innerHTML" hx-boost="false">
+            {{ csrf_field() }}
+            <input type="hidden" name="run_id" value="{{ run_id }}"><input type="hidden" name="result_id" value="{{ ex.result_id }}"><input type="hidden" name="verdict" value="{{ v }}">
+            <button class="btn btn-sm" type="submit">{{ v|capitalize }}</button>
+          </form>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </article>
+    {% endfor %}
+    </div>
+  </section>
+</div>

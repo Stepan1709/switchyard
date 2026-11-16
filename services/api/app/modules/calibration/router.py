@@ -97,12 +97,14 @@ async def list_results(
     service: ServiceDep,
     model_id: uuid.UUID | None = None,
     status_: Annotated[str | None, Query(alias="status")] = None,
+    request_id: uuid.UUID | None = None,
     cursor: str | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> ResultPage:
     return await service.list_results(
-        admin, project_id, run_id, model_id=model_id, status=status_, cursor=cursor, limit=limit
-    )
+        admin, project_id, run_id, model_id=model_id, status=status_, cursor=cursor, limit=limit,
+        request_id=request_id,
+    )  # fmt: skip
 
 
 @router.post("/task-types/{name}/labeled-samples", response_model=ImportReport)

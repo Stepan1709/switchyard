@@ -33,7 +33,7 @@ Requirements: Linux or WSL2, Docker with Compose v2, `make`, `uv`, `git`.
 
 ```bash
 make secrets   # random dev passwords in deploy/secrets/dev (not committed)
-make up        # postgres, redis, rabbitmq, migrations, api, gateway, worker, mock_llm + Adminer; waits for healthchecks
+make up        # postgres, redis, rabbitmq, migrations, api, gateway, worker, web, mock_llm + Adminer; waits for healthchecks
 make test      # unit and integration tests (integration tests start containers via Docker)
 make lint      # ruff + mypy
 make migrate   # apply database migrations (also runs automatically before api on `make up`)
@@ -41,7 +41,7 @@ make create-admin EMAIL=you@example.com   # create an administrator (password pr
 make down
 ```
 
-Dev endpoints (localhost only): gateway `:8000`, API `:8001` (`/docs`, `/health/live`, `/health/ready`), mock provider `:8003`, worker health `:8004`, Adminer `:8080`, RabbitMQ UI `:15672`, Postgres `:5433`, Redis `:6379`, AMQP `:5672`.
+Dev endpoints (localhost only): admin web interface `:8002`, gateway `:8000`, API `:8001` (`/docs`, `/health/live`, `/health/ready`), mock provider `:8003`, worker health `:8004`, Adminer `:8080`, RabbitMQ UI `:15672`, Postgres `:5433`, Redis `:6379`, AMQP `:5672`.
 Run `make help` for all commands.
 
 ## Admin API: first steps
@@ -360,10 +360,36 @@ requests already in flight when the limit is crossed still finish. The worker ra
 Redis restart) but never lowers it, because the log lags the gateway by a few seconds; `POST .../keys/{id}/budget/recount` sets it
 to exactly what the log says. If Redis is unavailable requests are let through.
 
+## Web interface
+
+Open `http://localhost:8002` and sign in with the administrator created at startup (`ADMIN_EMAIL` and the dev secret `deploy/secrets/dev/admin_password`).
+The pages follow the work itself:
+
+| Page | What it is for |
+|---|---|
+| Overview | requests, cost, the same traffic on the reference model, savings, key budgets, what needs attention |
+| Matrix | every model against every task type from the newest evaluated calibration: sort, filter, thresholds in colour; a click opens the answers behind a cell and lets you overrule the judge |
+| Models | providers (connection test), models, price history |
+| Calibrations | start a run (sample, thresholds, budget, judge), watch its progress, read the recommendation, propose a rule |
+| Rules | the live rule, proposed versions, history, rollback, the mode of every task type (record / shadow / route) |
+| Usage | cost and requests by day, by model and task type, the load of own servers and what idleness cost |
+| Feedback | dislike share by model and task type, a hint to roll a rule back, the latest ratings |
+| Projects | settings (reference model, body storage, PII masking), API keys with budgets (a new key is shown once), members, users |
+
+It is a server-rendered application (Jinja2, HTMX, Alpine.js, Chart.js; Tailwind is compiled by its standalone binary in the image build, nothing comes from a CDN).
+It is a thin client of the admin API, so it has no database access:
+
+- **Sessions.** The browser holds a random session id in an `HttpOnly`, `SameSite=Lax` cookie. The access and refresh tokens stay in Redis (database 1), keyed by a hash of that id, with a sliding expiry. Tokens are renewed before they expire; because the API rotates refresh tokens, parallel page requests share one renewal (a short Redis lock).
+- **CSRF.** Every request that changes something needs the session's token (a hidden field, or the `x-csrf-token` header HTMX adds) and a matching `Origin`. The login form has its own token tied to a short-lived anonymous session, and a login creates a fresh session id.
+- **Roles.** Viewers see no buttons that change things and the web app refuses their requests before calling the API, which checks the role as well.
+- **Headers.** A Content-Security-Policy without inline scripts, `X-Frame-Options: DENY`, `nosniff`.
+- Limitation: the API throttles failed logins per client address, and behind the web app that address is the web container's, so the per-address limit is shared by all web users (the per-email limit is not).
+
 ## Repository layout
 
 ```
 services/api/   application code (api, gateway and worker entry points), migrations, tests, Dockerfile
+services/web/   admin web interface (pages, sessions, tests, Dockerfile)
 services/mock_llm/   OpenAI-compatible provider simulator
 deploy/         compose files, secret templates
 scripts/        helper scripts

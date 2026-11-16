@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% from "macros.html" import empty, csrf_field %}
+{% block title %}Calibration {{ run.task_type }}{% endblock %}
+{% block content %}
+<div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+  <div>
+    <a class="text-xs text-brand-700 underline" href="/runs">&larr; All calibrations</a>
+    <h1 class="text-xl font-semibold">Calibration of <span class="text-brand-700">{{ run.task_type }}</span></h1>
+    <p class="text-xs text-slate-500">Started {{ run.created_at|dt }} · {{ run.strategy }} sampling of {{ run.samples_taken }} {{ "conversations" if run.sample_unit == "session" else "requests" }} · seed {{ run.seed }}</p>
+  </div>
+</div>
+
+{% include "partials/run_progress.html" %}
+
+<section class="card mt-4">
+  <h2 class="card-title">Setup</h2>
+  <dl class="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
+    <div><dt class="text-xs text-slate-500">Models compared</dt><dd>{% for id in run.candidate_model_ids %}{{ names.get(id, "?") }}{% if not loop.last %}, {% endif %}{% endfor %}</dd></div>
+    <div><dt class="text-xs text-slate-500">Reference</dt><dd>{{ names.get(run.reference_model_id, "?") }}</dd></div>
+    <div><dt class="text-xs text-slate-500">Judge</dt><dd>{{ names.get(run.judge_model_id, "none") if run.judge_model_id else "none" }}{% if run.judge_pairwise %} (side by side){% endif %}</dd></div>
+    <div><dt class="text-xs text-slate-500">Budget</dt><dd>{{ run.max_requests or "no" }} calls · {{ run.max_cost_usd|money if run.max_cost_usd else "no" }} limit</dd></div>
+    {% if run.thresholds %}
+    <div class="sm:col-span-2 lg:col-span-4"><dt class="text-xs text-slate-500">Thresholds</dt>
+      <dd>{% for k, v in run.thresholds.items() %}<span class="mr-3">{{ k|replace("_", " ") }}: <strong>{{ v }}</strong></span>{% endfor %}</dd></div>
+    {% endif %}
+  </dl>
+</section>
+
+{% if recommendation %}
+<section class="card mt-4">
+  <h2 class="card-title">Recommendation</h2>
+  {% if recommendation.primary %}
+  <p class="text-sm">Use <strong>{{ recommendation.chain_names[0] }}</strong>{% if recommendation.chain_names|length > 1 %}, then fall back to {{ recommendation.chain_names[1:]|join(", ") }}{% endif %}.</p>
+  {% else %}
+  <p class="text-sm text-amber-800">No model passed the thresholds, so nothing is proposed.</p>
+  {% endif %}
+  {% for n in recommendation.notes %}<p class="mt-1 text-sm text-slate-600">{{ n }}</p>{% endfor %}
+  {% if can_write and recommendation.primary %}
+  <form method="post" action="/runs/{{ run.id }}/recommendation/propose" class="mt-3 flex flex-wrap items-end gap-3">
+    {{ csrf_field() }}
+    <div class="min-w-64 flex-1"><label class="label" for="note">Note (optional)</label><input id="note" name="note" class="input" maxlength="500" placeholder="Why this rule"></div>
+    <button class="btn btn-primary" type="submit">Propose as a rule</button>
+  </form>
+  <p class="hint">A proposed rule changes nothing. You activate it on the Rules page.</p>
+  {% endif %}
+</section>
+
+<section class="card mt-4 overflow-x-auto">
+  <h2 class="card-title">Results by model</h2>
+  <table class="table">
+    <thead><tr><th>Model</th><th>Verdict</th><th class="num">Pass rate</th><th class="num">Quality</th><th class="num">Cost / request</th><th class="num">Latency p50 / p95</th><th class="num">Errors</th><th class="num">Rated</th></tr></thead>
+    <tbody>
+    {% set verdicts = {} %}
+    {% for v in recommendation.verdicts %}{% set _ = verdicts.update({v.model_id: v}) %}{% endfor %}
+    {% for a in aggregates %}
+      {% set v = verdicts.get(a.model_id) %}
+      <tr>
+        <td class="font-medium">{{ names.get(a.model_id, "?") }}{% if a.model_id == recommendation.primary %} <span title="Recommended">★</span>{% endif %}</td>
+        <td>{% if v and v.eligible %}<span class="badge badge-green">passes</span>{% elif v %}<span class="badge badge-red" title="{{ v.reasons|join('; ') }}">rejected</span>{% endif %}
+          {% if a.insufficient_data %}<span class="badge badge-amber">few examples</span>{% endif %}
+          {% if v and v.reasons %}<div class="text-xs text-slate-500">{{ v.reasons|join("; ") }}</div>{% endif %}</td>
+        <td class="num">{{ a.pass_rate|pct }}<div class="text-xs text-slate-400">{{ a.pass_rate_low|pct(0) }}–{{ a.pass_rate_high|pct(0) }}</div></td>
+        <td class="num">{{ a.quality_mean|decimal }}</td>
+        <td class="num">{{ a.cost_per_request_usd|money }}</td>
+        <td class="num">{{ a.latency_p50_ms|ms }} / {{ a.latency_p95_ms|ms }}</td>
+        <td class="num">{{ a.error_rate|pct }}</td>
+        <td class="num">{{ a.n_evaluated }} / {{ a.n_total }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="hint">See the answers behind these numbers on the <a class="underline" href="/matrix">Matrix</a>.</p>
+</section>
+
+{% if agreement %}
+<section class="card mt-4">
+  <h2 class="card-title">Judge against people</h2>
+  {% if agreement.compared %}
+  <p class="text-sm">On {{ agreement.compared }} answers that a person also rated, the judge agreed {{ agreement.agreed }} times ({{ agreement.agreement_rate|pct(0) }}); Cohen's kappa {{ agreement.cohen_kappa|decimal }}.</p>
+  {% endif %}
+  <p class="hint">{{ agreement.note }}</p>
+</section>
+{% endif %}
+{% elif run.status in ("completed", "cancelled", "budget_exceeded") %}
+<div class="mt-4">{% call empty("Evaluation in progress", "The numbers appear when every answer is rated. This page updates by itself.") %}{% endcall %}</div>
+{% endif %}
+{% endblock %}

@@ -77,3 +77,56 @@ class RecommendationOut(BaseModel):
     chain_names: list[str]
     verdicts: list[VerdictOut]
     notes: list[str]
+
+
+class MatrixModel(BaseModel):
+    id: uuid.UUID
+    name: str
+    tier: int
+    cost_type: str
+    enabled: bool
+    is_reference: bool
+
+
+class MatrixColumn(BaseModel):
+    """One task type: the run the numbers come from and the rule that is live now."""
+
+    task_type: str
+    mode: str
+    run_id: uuid.UUID | None
+    run_finished_at: datetime | None
+    criteria: CriteriaOut | None
+    primary: uuid.UUID | None
+    active_version: int | None
+    active_chain: list[uuid.UUID]
+
+
+class MatrixCell(BaseModel):
+    task_type: str
+    model_id: uuid.UUID
+    run_id: uuid.UUID
+    eligible: bool
+    reasons: list[str]
+    is_primary: bool
+    in_active_rule: bool
+    insufficient_data: bool
+    n_total: int
+    n_evaluated: int
+    quality_mean: float | None
+    pass_rate: float | None
+    pass_rate_low: float | None
+    pass_rate_high: float | None
+    prompt_tokens_avg: float | None
+    completion_tokens_avg: float | None
+    latency_p50_ms: float | None
+    latency_p95_ms: float | None
+    error_rate: float | None
+    cost_per_request_usd: Decimal | None
+
+
+class MatrixOut(BaseModel):
+    """Models x task types: the latest evaluated run of every task type, in one answer."""
+
+    models: list[MatrixModel]
+    columns: list[MatrixColumn]
+    cells: list[MatrixCell]

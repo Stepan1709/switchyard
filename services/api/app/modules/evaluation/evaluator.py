@@ -102,6 +102,12 @@ class EvaluationStarter:
             async with self._res.session_factory() as session, session.begin():
                 await self._start(session, run_id)
         except SQLAlchemyError as exc:
+            log.warning(
+                "evaluation_start_failed",
+                run_id=str(run_id),
+                error=type(exc).__name__,
+                detail=" ".join(str(exc).split())[:300],
+            )
             raise TemporaryError(f"{type(exc).__name__} while starting the evaluation") from exc
 
     async def _start(self, session: AsyncSession, run_id: uuid.UUID) -> None:

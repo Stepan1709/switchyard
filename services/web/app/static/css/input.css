@@ -1,0 +1,39 @@
+@import "tailwindcss";
+@source "../../templates";
+@source "../js";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --color-brand-50: #eef6ff;
+  --color-brand-100: #d9eaff;
+  --color-brand-500: #2f6fed;
+  --color-brand-600: #1f57d1;
+  --color-brand-700: #1a46a8;
+}
+
+@layer components {
+  .card { @apply rounded-lg border border-slate-200 bg-white p-4 shadow-sm; }
+  .card-title { @apply mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500; }
+  .btn { @apply inline-flex items-center justify-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50; }
+  .btn-primary { @apply border-brand-600 bg-brand-600 text-white hover:bg-brand-700; }
+  .btn-danger { @apply border-red-600 bg-red-600 text-white hover:bg-red-700; }
+  .btn-sm { @apply px-2 py-1 text-xs; }
+  .input { @apply block w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500; }
+  .label { @apply mb-1 block text-xs font-medium text-slate-600; }
+  .hint { @apply mt-1 text-xs text-slate-500; }
+  .badge { @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium; }
+  .badge-gray { @apply bg-slate-100 text-slate-700; }
+  .badge-green { @apply bg-emerald-100 text-emerald-800; }
+  .badge-amber { @apply bg-amber-100 text-amber-800; }
+  .badge-red { @apply bg-red-100 text-red-800; }
+  .badge-blue { @apply bg-brand-100 text-brand-700; }
+  .table { @apply w-full text-left text-sm; }
+  .table th { @apply whitespace-nowrap border-b border-slate-200 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500; }
+  .table td { @apply border-b border-slate-100 px-3 py-2 align-top; }
+  .table tbody tr:hover { @apply bg-slate-50; }
+  .num { @apply text-right tabular-nums; }
+}
+
+/* Fragments that are being loaded by HTMX fade slightly. */
+.htmx-request { opacity: 0.6; transition: opacity 150ms ease-in; }
+[x-cloak] { display: none !important; }

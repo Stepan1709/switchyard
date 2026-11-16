@@ -31,6 +31,12 @@ services:
     ports: ["127.0.0.1:${WORKER_PORT:-8004}:8004"]
     networks: [data, access, egress]
 
+  web:
+    ports: ["127.0.0.1:${WEB_PORT:-8002}:8002"]
+    networks: [data, access]
+    environment:
+      COOKIE_SECURE: "false"
+
   mock_llm:
     ports: ["127.0.0.1:${MOCK_LLM_PORT:-8003}:8003"]
     networks: [data, access]

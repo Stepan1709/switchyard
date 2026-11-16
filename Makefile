@@ -1,7 +1,7 @@
 # Run from WSL or Linux. Main commands: make help.
 SHELL := /bin/bash
 COMPOSE := docker compose --env-file .env -f deploy/compose.yml -f deploy/compose.dev.yml
-SERVICES := api mock_llm
+SERVICES := api mock_llm web
 SECRETS := postgres_password redis_password rabbitmq_password jwt_secret key_pepper admin_password master_keys
 # The repo may live on a Windows drive mounted into WSL; hardlinks do not work there.
 export UV_LINK_MODE := copy

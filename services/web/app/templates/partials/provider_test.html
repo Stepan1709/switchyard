@@ -1,0 +1,5 @@
+{% if result.ok %}<span class="badge badge-green">connected</span>{% else %}<span class="badge badge-red">failed</span>{% endif %}
+<div class="text-xs text-slate-600">
+  models list: {% if result.models_endpoint.ok %}ok, {{ result.models_endpoint.latency_ms }} ms{% else %}{{ result.models_endpoint.error or result.models_endpoint.detail or "error" }}{% endif %}
+  {% if result.completion %}<br>completion{% if result.model %} ({{ result.model }}){% endif %}: {% if result.completion.ok %}ok, {{ result.completion.latency_ms }} ms{% else %}{{ result.completion.error or result.completion.detail or "error" }}{% endif %}{% endif %}
+</div>

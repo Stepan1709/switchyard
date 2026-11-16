@@ -411,6 +411,7 @@ class CalibrationService:
         status: str | None,
         cursor: str | None,
         limit: int,
+        request_id: uuid.UUID | None = None,
     ) -> ResultPage:
         await self._run(admin, project_id, run_id)
         after: uuid.UUID | None = None
@@ -420,8 +421,9 @@ class CalibrationService:
             except ValueError as exc:
                 raise Unprocessable("The cursor is not valid") from exc
         rows = await self.repo.list_results(
-            run_id, model_id=model_id, status=status, after=after, limit=limit + 1
-        )
+            run_id, model_id=model_id, status=status, after=after, limit=limit + 1,
+            request_id=request_id,
+        )  # fmt: skip
         page = rows[:limit]
         return ResultPage(
             items=[ResultOut.model_validate(r) for r in page],
