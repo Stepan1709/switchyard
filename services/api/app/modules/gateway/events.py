@@ -67,6 +67,9 @@ def build_event(record: RequestRecord) -> dict[str, Any]:
         response_payload=response_payload,
         payload_skipped=record.payload_skipped,
         payload_masked=masked,
+        session_id=record.session_id,
+        step=record.step,
+        shadow_model_ids=record.shadow_model_ids,  # type: ignore[arg-type]
     )
     return event.model_dump(mode="json")
 

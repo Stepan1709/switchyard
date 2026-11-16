@@ -137,7 +137,68 @@ class CalibrationService:
         await self._check_candidates(candidate_ids)
         await self._check_judge(data, candidate_ids, reference_id)
 
+        if data.sample_unit == "session" and data.source != "traffic":
+            raise Unprocessable("Whole conversations can only be sampled from recorded traffic")
+
         seed = data.seed if data.seed is not None else random.SystemRandom().randrange(2**31)
+        if data.sample_unit == "session":
+            session_rows = await self._pick_sessions(project_id, reference_id, data, seed)
+            unit_ids = [row.request_id for row in session_rows]
+            chosen: list[sampling.PoolItem] = []
+        else:
+            session_rows = []
+            chosen = await self._pick_requests(project_id, reference_id, data, seed)
+            unit_ids = [item.request_id for item in chosen]
+
+        run = CalibrationRun(
+            id=uuid.uuid4(),
+            project_id=project_id,
+            task_type=data.task_type,
+            reference_model_id=reference_id,
+            candidate_model_ids=candidate_ids,
+            status="running",
+            strategy=data.strategy,
+            source=data.source,
+            sample_unit=data.sample_unit,
+            seed=seed,
+            sample_size=data.sample_size,
+            samples_taken=len(unit_ids),
+            total_jobs=len(unit_ids) * len(candidate_ids),
+            max_requests=data.max_requests,
+            max_cost_usd=data.max_cost_usd,
+            thresholds=data.thresholds.model_dump(exclude_none=True),
+            judge_model_id=data.judge_model_id,
+            judge_pairwise=data.judge_pairwise,
+            evaluation_status="pending",
+            created_by_id=admin.id,
+        )
+        self.session.add(run)
+        await self.session.flush()  # the samples refer to the run
+
+        if data.sample_unit == "session":
+            self._copy_session_samples(run.id, session_rows)
+            await self.session.flush()
+        else:
+            await self._copy_samples(project_id, run.id, chosen)
+        for request_id in unit_ids:
+            for model_id in candidate_ids:
+                enqueue(
+                    self.session,
+                    REPLAY_EXECUTE,
+                    {
+                        "run_id": str(run.id),
+                        "request_id": str(request_id),
+                        "model_id": str(model_id),
+                    },
+                    correlation_id=str(run.id),
+                )
+        return await self._finish_create(
+            admin, project_id, data, candidate_ids, run, len(unit_ids), ip
+        )
+
+    async def _pick_requests(
+        self, project_id: uuid.UUID, reference_id: uuid.UUID, data: RunCreate, seed: int
+    ) -> list[sampling.PoolItem]:
         pool: list[sampling.PoolItem] = []
         if data.source in ("traffic", "both"):
             pool += await self.repo.traffic_pool(
@@ -155,44 +216,63 @@ class CalibrationService:
             raise Unprocessable(
                 "There is nothing to replay: no suitable recorded requests or labelled examples"
             )
+        return chosen
 
-        run = CalibrationRun(
-            id=uuid.uuid4(),
-            project_id=project_id,
-            task_type=data.task_type,
-            reference_model_id=reference_id,
-            candidate_model_ids=candidate_ids,
-            status="running",
-            strategy=data.strategy,
-            source=data.source,
-            seed=seed,
-            sample_size=data.sample_size,
-            samples_taken=len(chosen),
-            total_jobs=len(chosen) * len(candidate_ids),
-            max_requests=data.max_requests,
-            max_cost_usd=data.max_cost_usd,
-            thresholds=data.thresholds.model_dump(exclude_none=True),
-            judge_model_id=data.judge_model_id,
-            judge_pairwise=data.judge_pairwise,
-            evaluation_status="pending",
-            created_by_id=admin.id,
+    async def _pick_sessions(
+        self, project_id: uuid.UUID, reference_id: uuid.UUID, data: RunCreate, seed: int
+    ) -> list[Any]:
+        """The steps of the chosen conversations, every step of each, in order."""
+        pool = await self.repo.session_pool(
+            project_id,
+            data.task_type,
+            reference_id,
+            since=data.since,
+            until=data.until,
+            max_steps=self.settings.calibration_max_session_steps,
+            limit=self.settings.calibration_pool_limit,
         )
-        self.session.add(run)
-        await self.session.flush()  # the samples refer to the run
+        chosen = sampling.choose(pool, data.sample_size, data.strategy, seed)
+        if not chosen:
+            raise Unprocessable(
+                "There are no complete recorded conversations to replay (every step of a "
+                "conversation must be recorded, with its body, and answered by the reference)"
+            )
+        rows = await self.repo.session_rows(
+            project_id, [i.session_id for i in chosen if i.session_id], reference_id
+        )
+        if len(rows) > self.settings.calibration_max_session_samples:
+            raise Unprocessable(
+                f"The chosen conversations have {len(rows)} steps, more than the limit of "
+                f"{self.settings.calibration_max_session_samples}: ask for fewer conversations"
+            )
+        return rows
 
-        await self._copy_samples(project_id, run.id, chosen)
-        for item in chosen:
-            for model_id in candidate_ids:
-                enqueue(
-                    self.session,
-                    REPLAY_EXECUTE,
-                    {
-                        "run_id": str(run.id),
-                        "request_id": str(item.request_id),
-                        "model_id": str(model_id),
-                    },
-                    correlation_id=str(run.id),
+    def _copy_session_samples(self, run_id: uuid.UUID, rows: list[Any]) -> None:
+        for row in rows:
+            self.session.add(
+                RunSample(
+                    run_id=run_id,
+                    request_id=row.request_id,
+                    source="traffic",
+                    request_payload=row.request_payload,
+                    reference_response=row.response_payload,
+                    session_id=row.session_id,
+                    step=row.step,
+                    reference_prompt_tokens=row.prompt_tokens,
+                    reference_completion_tokens=row.completion_tokens,
                 )
+            )
+
+    async def _finish_create(
+        self,
+        admin: Admin,
+        project_id: uuid.UUID,
+        data: RunCreate,
+        candidate_ids: list[uuid.UUID],
+        run: CalibrationRun,
+        samples: int,
+        ip: str | None,
+    ) -> RunOut:
         audit.record(
             self.session,
             action="calibration_run.create",
@@ -203,7 +283,8 @@ class CalibrationService:
                 "project_id": str(project_id),
                 "task_type": data.task_type,
                 "candidates": [str(c) for c in candidate_ids],
-                "samples": len(chosen),
+                "samples": samples,
+                "sample_unit": data.sample_unit,
                 "jobs": run.total_jobs,
             },
             ip=ip,

@@ -53,6 +53,20 @@ class RouteTarget:
 
 
 @dataclass(frozen=True)
+class TaskRoute:
+    """What the gateway does for one (project, task type) that is not plain `record`."""
+
+    mode: str  # shadow | route
+    chain: tuple[RouteTarget, ...] = ()  # route: [primary, fallback, ...] (usable models only)
+    rule_version: int | None = None
+    shadow: tuple[RouteTarget, ...] = ()  # shadow: models that get a copy
+    shadow_rate: float = 0.0
+    # The schema a non-streamed answer must fit, from the first required json_schema check of
+    # the task type: an answer that does not fit makes the gateway try the next model.
+    validation_schema: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
 class KeyInfo:
     key_id: str
     prefix: str
@@ -78,6 +92,16 @@ class Snapshot:
     keys: Mapping[str, KeyInfo]  # by key prefix
     projects: Mapping[str, ProjectInfo]  # by project id
     model_names: tuple[str, ...]  # enabled models, for GET /v1/models
+    # Every usable model by id, and the id behind each name (a name shared by two providers
+    # resolves to the first provider by name), so a pinned `model` can be found without the
+    # database.
+    targets: Mapping[str, RouteTarget] = field(default_factory=dict)
+    target_ids_by_name: Mapping[str, str] = field(default_factory=dict)
+    # "project_id|task_type" -> route. Task types in plain record mode are absent.
+    routes: Mapping[str, TaskRoute] = field(default_factory=dict)
+
+    def route_of(self, project_id: str, task_type: str | None) -> TaskRoute | None:
+        return self.routes.get(f"{project_id}|{task_type}") if task_type else None
 
     # ---- (de)serialisation for the Redis copy ---------------------------------------------
     def to_json(self) -> str:
@@ -101,6 +125,19 @@ class Snapshot:
                 for pid, p in data["projects"].items()
             },
             model_names=tuple(data["model_names"]),
+            targets={i: RouteTarget(**t) for i, t in data.get("targets", {}).items()},
+            target_ids_by_name=dict(data.get("target_ids_by_name", {})),
+            routes={
+                k: TaskRoute(
+                    mode=r["mode"],
+                    chain=tuple(RouteTarget(**t) for t in r["chain"]),
+                    rule_version=r["rule_version"],
+                    shadow=tuple(RouteTarget(**t) for t in r["shadow"]),
+                    shadow_rate=r["shadow_rate"],
+                    validation_schema=r["validation_schema"],
+                )
+                for k, r in data.get("routes", {}).items()
+            },
         )
 
 
@@ -127,10 +164,31 @@ _MODELS_SQL = text(
 )
 
 
+_ROUTES_SQL = text(
+    """
+    SELECT tt.project_id, tt.name, tt.mode, tt.shadow_model_ids, tt.shadow_rate,
+           r.version AS rule_version, r.chain
+    FROM task_types tt
+    LEFT JOIN routing_rules r
+           ON r.project_id = tt.project_id AND r.task_type = tt.name AND r.status = 'active'
+    WHERE tt.mode <> 'record'
+    """
+)
+_SCHEMAS_SQL = text(
+    """
+    SELECT DISTINCT ON (project_id, task_type) project_id, task_type, config
+    FROM task_checks WHERE kind = 'json_schema' AND required
+    ORDER BY project_id, task_type, position, created_at, id
+    """
+)
+
+
 async def build_snapshot(session: AsyncSession) -> Snapshot:
     """Read everything the gateway needs in two queries (one consistent view)."""
     key_rows = (await session.execute(_KEYS_SQL)).mappings().all()
     model_rows = (await session.execute(_MODELS_SQL)).mappings().all()
+    route_rows = (await session.execute(_ROUTES_SQL)).mappings().all()
+    schema_rows = (await session.execute(_SCHEMAS_SQL)).mappings().all()
 
     targets: dict[str, RouteTarget] = {}
     names: set[str] = set()
@@ -148,6 +206,28 @@ async def build_snapshot(session: AsyncSession) -> Snapshot:
             auth_type=m["auth_type"],
             api_key_encrypted=m["api_key_encrypted"],
             context_window=m["context_window"],
+        )
+
+    by_name: dict[str, str] = {}
+    for m in sorted(model_rows, key=lambda r: (r["provider_name"], str(r["id"]))):
+        if str(m["id"]) in targets:
+            by_name.setdefault(m["name"], str(m["id"]))
+
+    schemas = {
+        f"{r['project_id']}|{r['task_type']}": r["config"].get("schema") for r in schema_rows
+    }
+    routes: dict[str, TaskRoute] = {}
+    for r in route_rows:
+        key = f"{r['project_id']}|{r['name']}"
+        chain = tuple(targets[str(i)] for i in (r["chain"] or []) if str(i) in targets)
+        shadow = tuple(targets[str(i)] for i in (r["shadow_model_ids"] or []) if str(i) in targets)
+        routes[key] = TaskRoute(
+            mode=r["mode"],
+            chain=chain if r["mode"] == "route" else (),
+            rule_version=r["rule_version"] if r["mode"] == "route" else None,
+            shadow=shadow if r["mode"] == "shadow" else (),
+            shadow_rate=float(r["shadow_rate"]) if r["mode"] == "shadow" else 0.0,
+            validation_schema=schemas.get(key),
         )
 
     keys: dict[str, KeyInfo] = {}
@@ -179,6 +259,8 @@ async def build_snapshot(session: AsyncSession) -> Snapshot:
             "keys": {p: asdict(v) for p, v in keys.items()},
             "projects": {p: asdict(v) for p, v in projects.items()},
             "models": model_names,
+            "targets": {i: asdict(t) for i, t in targets.items()},
+            "routes": {k: asdict(v) for k, v in routes.items()},
         }
     )
     return Snapshot(
@@ -187,6 +269,9 @@ async def build_snapshot(session: AsyncSession) -> Snapshot:
         keys=keys,
         projects=projects,
         model_names=model_names,
+        targets=targets,
+        target_ids_by_name=by_name,
+        routes=routes,
     )
 
 
@@ -222,9 +307,10 @@ class SnapshotStore:
     # ---- installing -----------------------------------------------------------------------
     def _install(self, snapshot: Snapshot, source: str) -> None:
         keys: dict[str, str | None] = {}
-        for project in snapshot.projects.values():
-            ref = project.reference
-            if ref is None or ref.provider_id in keys:
+        usable = list(snapshot.targets.values())
+        usable += [p.reference for p in snapshot.projects.values() if p.reference is not None]
+        for ref in usable:
+            if ref.provider_id in keys:
                 continue
             if ref.api_key_encrypted is None:
                 keys[ref.provider_id] = None

@@ -7,11 +7,13 @@ from app.core.events import (
     JUDGE_EXECUTE,
     REPLAY_EXECUTE,
     REQUEST_COMPLETED,
+    SHADOW_EXECUTE,
 )
 from app.core.messaging import ConsumerSpec
 from app.core.resources import Resources
 from app.modules.calibration.executor import ReplayExecutor
 from app.modules.evaluation.evaluator import EvaluationStarter, Evaluator
+from app.modules.routing.shadow import ShadowExecutor
 from app.modules.traffic.writer import RequestLogWriter
 
 
@@ -46,6 +48,12 @@ def judge_spec(evaluator: Evaluator, settings: Settings) -> ConsumerSpec:
     )
 
 
+def shadow_spec(executor: ShadowExecutor, settings: Settings) -> ConsumerSpec:
+    return ConsumerSpec(
+        settings.shadow_queue, [SHADOW_EXECUTE], executor.handle, prefetch=settings.shadow_prefetch
+    )
+
+
 def build_consumers(res: Resources, settings: Settings) -> list[ConsumerSpec]:
     keyring = KeyRing.from_text(settings.master_keys.get_secret_value())
     return [
@@ -53,4 +61,5 @@ def build_consumers(res: Resources, settings: Settings) -> list[ConsumerSpec]:
         replay_spec(ReplayExecutor(res, settings, keyring), settings),
         run_finished_spec(EvaluationStarter(res, settings), settings),
         judge_spec(Evaluator(res, settings, keyring), settings),
+        shadow_spec(ShadowExecutor(res, settings, keyring), settings),
     ]

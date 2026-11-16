@@ -16,6 +16,7 @@ from app.modules.calibration import models as calibration_models
 from app.modules.evaluation import models as evaluation_models
 from app.modules.projects import models as projects_models
 from app.modules.registry import models as registry_models
+from app.modules.routing import models as routing_models
 from app.modules.traffic import models as traffic_models
 
 ALL_MODEL_MODULES: tuple[ModuleType, ...] = (
@@ -28,6 +29,7 @@ ALL_MODEL_MODULES: tuple[ModuleType, ...] = (
     evaluation_models,
     projects_models,
     registry_models,
+    routing_models,
     traffic_models,
 )
 

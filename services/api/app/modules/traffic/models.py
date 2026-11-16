@@ -16,7 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base, UUIDPrimaryKeyMixin
@@ -67,6 +67,10 @@ class TrafficRequest(Base):
     response_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     payload_skipped: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     payload_masked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # An agent's conversation: the client's x-session-id, or a key derived from the first
+    # messages. `step` counts the assistant turns before this request (0 = the first step).
+    session_id: Mapped[str | None] = mapped_column(String(128))
+    step: Mapped[int | None] = mapped_column(SmallInteger)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -85,9 +89,15 @@ class TaskType(UUIDPrimaryKeyMixin, Base):
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(64))
-    # record: everything goes to the reference model and is logged. shadow and route arrive in
-    # later stages; the column is here so that the registry does not change shape then.
+    # record: everything goes to the reference model and is logged.
+    # shadow: the same, and a share of the traffic is also sent to candidates in the background.
+    # route: the active rule decides which model answers.
     mode: Mapped[str] = mapped_column(String(16), default="record", server_default="record")
+    # shadow mode: which models get a copy and what share of requests is copied (0..1)
+    shadow_model_ids: Mapped[list[uuid.UUID]] = mapped_column(
+        ARRAY(UUID(as_uuid=True)), default=list, server_default="{}"
+    )
+    shadow_rate: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
     auto_registered: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -107,4 +117,12 @@ Index(
     TrafficRequest.task_type,
     TrafficRequest.started_at.desc(),
     TrafficRequest.request_id.desc(),
+)
+# the steps of one conversation, for calibration runs that sample whole sessions
+Index(
+    "ix_requests_project_session",
+    TrafficRequest.project_id,
+    TrafficRequest.session_id,
+    TrafficRequest.step,
+    postgresql_where=TrafficRequest.session_id.is_not(None),
 )

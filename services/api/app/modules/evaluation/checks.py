@@ -274,6 +274,37 @@ def schema_errors(value: Any, schema: Any, path: str = "$") -> list[str]:
     return errors
 
 
+# ---- arguments of tool calls -----------------------------------------------------------------
+def tool_args_errors(answer: Answer, tools: list[dict[str, Any]] | None) -> list[str]:
+    """Is every tool call of the answer a call that the request made possible?
+
+    The tools offered in the request are the contract: a call has to name one of them and its
+    arguments have to be an object that fits the tool's parameter schema. This needs no
+    reference answer, so it also works where nothing recorded can be compared with.
+    """
+    offered: dict[str, Any] = {}
+    for tool in tools or []:
+        function = tool.get("function") if isinstance(tool, dict) else None
+        if isinstance(function, dict) and isinstance(function.get("name"), str):
+            offered[function["name"]] = function.get("parameters")
+    errors: list[str] = []
+    for index, call in enumerate(answer.tool_calls):
+        where = f"call {index + 1} ({call.name})"
+        if offered and call.name not in offered:
+            errors.append(f"{where}: no such tool in the request")
+            continue
+        if not isinstance(call.arguments, dict):
+            errors.append(f"{where}: arguments are not a JSON object")
+            continue
+        schema = offered.get(call.name)
+        if isinstance(schema, dict):
+            try:  # a tool schema written elsewhere may use keywords this validator cannot read
+                errors += [f"{where}: {e}" for e in schema_errors(call.arguments, schema)]
+            except (re.error, TypeError, KeyError):
+                continue
+    return errors
+
+
 # ---- the checks ------------------------------------------------------------------------------
 @dataclass
 class CheckOutcome:
@@ -301,6 +332,7 @@ def validate_check_config(kind: str, config: dict[str, Any]) -> dict[str, Any]:
         "exact_match": {"ignore_case"},
         "regex": {"pattern", "mode"},
         "tool_call_match": {"ignore_args", "names_only"},
+        "tool_args_valid": set(),
         "llm_judge": {"min_score", "rubric"},
     }
     if kind not in allowed:
@@ -348,6 +380,7 @@ def run_check(
     truth: Answer | None,
     *,
     required: bool = True,
+    tools: list[dict[str, Any]] | None = None,
 ) -> CheckOutcome:
     """Apply one deterministic check. `truth` is the expected or the reference answer."""
     if kind == "json_schema":
@@ -371,6 +404,11 @@ def run_check(
             answer.content, truth.content, ignore_case=bool(config.get("ignore_case"))
         )
         return CheckOutcome(kind, same, required, "" if same else "differs from the expected text")
+    if kind == "tool_args_valid":
+        if not answer.tool_calls:
+            return CheckOutcome(kind, None, required, "the answer made no tool call")
+        errors = tool_args_errors(answer, tools)
+        return CheckOutcome(kind, not errors, required, "; ".join(errors[:3]))
     if kind == "tool_call_match":
         if truth is None or not truth.tool_calls:
             return CheckOutcome(kind, None, required, "no expected tool call")

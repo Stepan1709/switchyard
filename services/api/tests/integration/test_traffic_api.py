@@ -226,6 +226,8 @@ async def test_task_types_can_be_created_and_their_mode_is_restricted(client, ad
     assert created.json() == {
         "name": "classification",
         "mode": "record",
+        "shadow_model_ids": [],
+        "shadow_rate": 0.0,
         "auto_registered": False,
         "created_at": created.json()["created_at"],
     }
@@ -241,9 +243,11 @@ async def test_task_types_can_be_created_and_their_mode_is_restricted(client, ad
 
     url = f"/projects/{pid}/task-types/classification"
     assert (await client.patch(url, json={"mode": "record"}, headers=admin)).status_code == 200
-    for mode in ("shadow", "route"):
-        refused = await client.patch(url, json={"mode": mode}, headers=admin)
-        assert refused.status_code == 422 and "not available yet" in refused.json()["detail"]
+    # the other modes need what makes them work: an active rule, or models to copy to
+    route = await client.patch(url, json={"mode": "route"}, headers=admin)
+    assert route.status_code == 422 and "active rule" in route.json()["detail"]
+    shadow = await client.patch(url, json={"mode": "shadow"}, headers=admin)
+    assert shadow.status_code == 422 and "shadow_model_ids" in shadow.json()["detail"]
     assert (await client.patch(url, json={"mode": "bogus"}, headers=admin)).status_code == 422
     assert (
         await client.patch(

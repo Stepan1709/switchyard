@@ -15,7 +15,8 @@ from app.core.messaging.topology import QueueNames
 from app.core.outbox import OutboxRelay
 from app.modules.calibration.executor import ReplayExecutor
 from app.modules.evaluation.evaluator import EvaluationStarter, Evaluator
-from app.worker.consumers import judge_spec, replay_spec, run_finished_spec
+from app.modules.routing.shadow import ShadowExecutor
+from app.worker.consumers import judge_spec, replay_spec, run_finished_spec, shadow_spec
 from tests.integration.conftest import MOCK_KEY, wait_until
 from tests.integration.gateway_support import Provisioned, provision
 from tests.integration.test_traffic_api import insert_rows
@@ -171,6 +172,9 @@ class Pipeline:
             replay_spec(executor, self.settings),
             run_finished_spec(EvaluationStarter(res, self.settings), self.settings),
             judge_spec(Evaluator(res, self.settings, self.api_app.state.keyring), self.settings),
+            shadow_spec(
+                ShadowExecutor(res, self.settings, self.api_app.state.keyring), self.settings
+            ),
         )
         for spec in specs:
             consumer = Consumer(
@@ -193,7 +197,12 @@ class Pipeline:
 
 async def delete_queues(amqp, settings) -> None:
     channel = await amqp.channel()
-    for name in (settings.replay_queue, settings.run_finished_queue, settings.judge_queue):
+    for name in (
+        settings.replay_queue,
+        settings.run_finished_queue,
+        settings.judge_queue,
+        settings.shadow_queue,
+    ):
         names = QueueNames(name)
         for q in [names.work, names.dlq, *(names.retry(i) for i in (1, 2, 3))]:
             await channel.queue_delete(q)

@@ -25,14 +25,25 @@ class PreparedBody:
     original: dict[str, Any]
 
 
-def prepare_body(raw: bytes, target_model: str) -> PreparedBody:
+def parse_body(raw: bytes) -> dict[str, Any]:
+    """The request body as a JSON object. The model is chosen from it, so it is read first."""
     try:
         data: Any = json.loads(raw)
     except ValueError as exc:
         raise bad_request("The request body is not valid JSON.", "invalid_json") from exc
     if not isinstance(data, dict):
         raise bad_request("The request body must be a JSON object.", "invalid_body")
+    return data
 
+
+def prepare_body(raw: bytes, target_model: str) -> PreparedBody:
+    return build_prepared(parse_body(raw), target_model)
+
+
+def build_prepared(parsed: dict[str, Any], target_model: str) -> PreparedBody:
+    """The body for one model. Called again for each model of a fallback chain, so `parsed`
+    is never changed: a shallow copy gets the new `model`."""
+    data = dict(parsed)
     stream = data.get("stream", False)
     if not isinstance(stream, bool):
         raise GatewayError(

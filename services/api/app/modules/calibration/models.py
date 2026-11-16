@@ -70,6 +70,7 @@ class CalibrationRun(UUIDPrimaryKeyMixin, Base):
         CheckConstraint("strategy in ('random', 'stratified')", name="strategy"),
         CheckConstraint("source in ('traffic', 'labeled', 'both')", name="source"),
         CheckConstraint("sample_size > 0", name="sample_positive"),
+        CheckConstraint("sample_unit in ('request', 'session')", name="sample_unit"),
         CheckConstraint(
             "evaluation_status in ('pending', 'running', 'done')", name="evaluation_status"
         ),
@@ -89,6 +90,9 @@ class CalibrationRun(UUIDPrimaryKeyMixin, Base):
     status_reason: Mapped[str | None] = mapped_column(String(300))
     strategy: Mapped[str] = mapped_column(String(16), default="random")
     source: Mapped[str] = mapped_column(String(16), default="traffic")
+    # request: the sample is single requests. session: whole agent conversations (every step),
+    # so that a run can say how many conversations a model would have got right end to end.
+    sample_unit: Mapped[str] = mapped_column(String(8), default="request", server_default="request")
     seed: Mapped[int] = mapped_column(Integer)
     sample_size: Mapped[int] = mapped_column(Integer)  # requested
     samples_taken: Mapped[int] = mapped_column(Integer, default=0)  # what the pool could give
@@ -135,6 +139,8 @@ class RunSample(Base):
     # The reference answer (recorded traffic); expected is the labelled answer (imports).
     reference_response: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     expected: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    session_id: Mapped[str | None] = mapped_column(String(128))
+    step: Mapped[int | None] = mapped_column(SmallInteger)
     reference_prompt_tokens: Mapped[int | None] = mapped_column(Integer)
     reference_completion_tokens: Mapped[int | None] = mapped_column(Integer)
 

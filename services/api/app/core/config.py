@@ -184,6 +184,15 @@ class Settings(BaseSettings):
     judge_invalid_retries: int = 2  # re-asks when the judge's reply is not the agreed JSON
     judge_text_limit: int = 6000  # characters of the request or an answer shown to the judge
     calibration_min_samples: int = 30  # fewer evaluated answers = "not enough data"
+    calibration_max_session_samples: int = 3000  # steps of all sampled conversations together
+    calibration_max_session_steps: int = 30  # longer conversations are not sampled
+
+    # Routing: the defaults of the recommendation (a run's own thresholds win) and the
+    # background copies of shadow mode.
+    recommend_min_pass_rate: float = 0.9
+    recommend_max_error_rate: float = 0.05
+    shadow_queue: str = "worker.shadow"  # tests use a private queue per test
+    shadow_prefetch: int = 8
 
     # Idempotency-Key for administrator POSTs.
     idempotency_ttl_hours: int = 24

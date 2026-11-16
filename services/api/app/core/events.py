@@ -14,6 +14,8 @@ REQUEST_COMPLETED = "request.completed"
 # Calibration: a command (one replay job) and an event (a run reached an end state).
 REPLAY_EXECUTE = "replay.execute"
 CALIBRATION_RUN_FINISHED = "calibration.run.finished"
+SHADOW_EXECUTE = "shadow.execute"  # send a copy of a live request to a candidate model
+RULES_CHANGED = "rules.changed"  # a routing rule or a task type mode changed
 JUDGE_EXECUTE = "judge.execute"  # evaluate one replay result (checks and, if needed, the judge)
 
 
@@ -46,3 +48,9 @@ class RequestCompleted(BaseModel):
     response_payload: dict[str, Any] | None = None
     payload_skipped: bool = False
     payload_masked: bool = False
+    # the conversation and the step in it (see gateway/session.py)
+    session_id: str | None = None
+    step: int | None = None
+    # Not a column: models that should get a copy of this request (shadow mode). The writer
+    # turns it into jobs in the same transaction that stores the request.
+    shadow_model_ids: list[uuid.UUID] = []

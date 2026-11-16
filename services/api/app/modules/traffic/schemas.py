@@ -52,6 +52,9 @@ class TaskTypeCreate(BaseModel):
 
 class TaskTypeUpdate(BaseModel):
     mode: TaskMode
+    # shadow only: the models that get a copy of a share of the live requests
+    shadow_model_ids: list[uuid.UUID] = Field(default_factory=list, max_length=5)
+    shadow_rate: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class TaskTypeOut(BaseModel):
@@ -59,5 +62,7 @@ class TaskTypeOut(BaseModel):
 
     name: str
     mode: TaskMode
+    shadow_model_ids: list[uuid.UUID]
+    shadow_rate: float
     auto_registered: bool
     created_at: datetime

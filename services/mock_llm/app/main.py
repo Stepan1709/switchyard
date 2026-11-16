@@ -4,6 +4,7 @@ Endpoints: GET /v1/models, POST /v1/chat/completions (stream and non-stream), he
 
 Failure injection is per request, through headers (so a test controls exactly one call):
   x-mock-fail: 500 | 503 | 429 | timeout     answer with that error (timeout = hang)
+  x-mock-fail-models: a,b                    apply x-mock-fail only to these models
   x-mock-delay-ms: N                         extra delay before processing
   x-mock-output-tokens: N                    pad the answer to about N tokens
   x-mock-drop-after-chunks: N                (stream) break the connection after N chunks
@@ -69,7 +70,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     app = FastAPI(title="Switchyard mock LLM provider")
     # Counters for tests: did the gateway really stop a stream when its client left?
-    stats = {"requests": 0, "streams_started": 0, "streams_completed": 0, "streams_aborted": 0}
+    stats: dict[str, Any] = {
+        "requests": 0, "streams_started": 0, "streams_completed": 0, "streams_aborted": 0,
+        "models": {},  # calls that reached a model, by model name
+    }  # fmt: skip
 
     async def sleep(seconds: float) -> None:
         scaled = seconds * settings.time_scale
@@ -91,10 +95,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         return None
 
-    async def inject_failure(request: Request) -> JSONResponse | None:
+    async def inject_failure(request: Request, model: str | None = None) -> JSONResponse | None:
         delay = request.headers.get("x-mock-delay-ms")
         if delay and delay.isdigit():
             await sleep(int(delay) / 1000)
+        only = request.headers.get("x-mock-fail-models")
+        if only and model not in {m.strip() for m in only.split(",")}:
+            return None  # the failure is meant for other models
         fail = request.headers.get("x-mock-fail", "").lower()
         if fail in {"500", "503"}:
             return error(int(fail), "The mock server is failing on purpose", "server_error")
@@ -112,7 +119,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return None
 
     @app.get("/_stats")
-    async def get_stats() -> dict[str, int]:
+    async def get_stats() -> dict[str, Any]:
         return stats
 
     @app.get("/health/live")
@@ -146,7 +153,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         stats["requests"] += 1
         if (denied := check_auth(request)) is not None:
             return denied
-        if (failure := await inject_failure(request)) is not None:
+        if (failure := await inject_failure(request, body.model)) is not None:
             return failure
 
         model = MODELS.get(body.model)
@@ -157,6 +164,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "invalid_request_error",
                 "model_not_found",
             )
+        stats["models"][body.model] = stats["models"].get(body.model, 0) + 1
         messages = [m.model_dump() for m in body.messages]
         used = engine.prompt_tokens(messages)
         if used > model.context_window:
