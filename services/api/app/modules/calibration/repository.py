@@ -285,6 +285,12 @@ class CalibrationRepository:
         )
         return {status: int(n) for status, n in (await self.session.execute(stmt)).all()}
 
+    async def count_evaluations(self, run_id: uuid.UUID) -> int:
+        row = await self.session.execute(
+            text("SELECT count(*) FROM evaluations WHERE run_id = :r"), {"r": run_id}
+        )
+        return int(row.scalar_one())
+
     async def spending(self, run_id: uuid.UUID) -> tuple[Decimal, int]:
         """(total cost in USD, number of provider calls made) according to the stored results."""
         stmt = select(

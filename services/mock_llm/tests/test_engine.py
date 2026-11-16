@@ -60,6 +60,15 @@ def test_judge_returns_structured_verdict():
     assert data["verdict"] in {"pass", "fail"} and data["rationale"]
 
 
+def test_judge_compares_two_answers_when_asked_to():
+    prompt = "TASK: PAIRWISE COMPARISON " + chr(10) + "ANSWER A: x " + chr(10) + "ANSWER B: y"
+    first = json.loads(ask(JUDGE, prompt).content)
+    assert first["winner"] in {"A", "B", "tie"} and first["rationale"]
+    assert json.loads(ask(JUDGE, prompt).content) == first  # deterministic
+    seen = {json.loads(ask(JUDGE, f"{prompt} {i}").content)["winner"] for i in range(40)}
+    assert seen == {"A", "B", "tie"}  # every outcome is possible
+
+
 TOOLS = [
     {
         "type": "function",

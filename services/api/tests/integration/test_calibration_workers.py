@@ -46,6 +46,7 @@ class WorkerProcess:
             "CALIBRATION_SLOT_TTL": "3",
             "REPLAY_QUEUE": queues["replay"],
             "RUN_FINISHED_QUEUE": queues["done"],
+            "JUDGE_QUEUE": queues["judge"],
             "REQUEST_LOG_QUEUE": queues["log"],
         }
         self.proc: asyncio.subprocess.Process | None = None
@@ -92,6 +93,7 @@ async def queues(amqp, queue_name):
         "replay": f"{queue_name}_replay",
         "done": f"{queue_name}_done",
         "log": f"{queue_name}_log",
+        "judge": f"{queue_name}_judge",
     }
     yield names
     channel = await amqp.channel()
