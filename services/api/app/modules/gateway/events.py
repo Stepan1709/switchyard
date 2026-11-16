@@ -24,7 +24,7 @@ from app.core.config import Settings
 from app.core.events import REQUEST_COMPLETED, RequestCompleted
 from app.core.logging import get_logger
 from app.core.messaging import Message, Publisher, PublishError
-from app.core.messaging.queues import declare_request_log_queue
+from app.core.messaging.queues import declare_feedback_queue, declare_request_log_queue
 from app.modules.gateway.pii import mask_json
 from app.modules.gateway.record import RequestRecord
 
@@ -69,6 +69,8 @@ def build_event(record: RequestRecord) -> dict[str, Any]:
         payload_masked=masked,
         session_id=record.session_id,
         step=record.step,
+        cost_usd=record.cost_usd,
+        reference_cost_usd=record.reference_cost_usd,
         shadow_model_ids=record.shadow_model_ids,  # type: ignore[arg-type]
     )
     return event.model_dump(mode="json")
@@ -76,7 +78,7 @@ def build_event(record: RequestRecord) -> dict[str, Any]:
 
 @dataclass
 class _Pending:
-    record: RequestRecord
+    record: RequestRecord | None  # None: an event that arrived ready-made (feedback)
     size: int
     message: Message | None = None  # built once, reused if the publish has to be retried
 
@@ -115,6 +117,16 @@ class TrafficEventPublisher:
         self._buffer.append(_Pending(record, size))
         self._empty.clear()
         self._bytes += size
+        self._enforce_limits()
+        self._wake.set()
+
+    def submit_event(self, event_type: str, payload: dict[str, Any], correlation_id: str) -> None:
+        """Queue a ready-made event (a rating from a client). Same buffer, same guarantees as
+        the request log: never blocks, never raises, oldest dropped when the buffer is full."""
+        message = Message(type=event_type, payload=payload, correlation_id=correlation_id)
+        self._buffer.append(_Pending(None, _BASE_EVENT_BYTES, message))
+        self._empty.clear()
+        self._bytes += _BASE_EVENT_BYTES
         self._enforce_limits()
         self._wake.set()
 
@@ -184,6 +196,7 @@ class TrafficEventPublisher:
         self._connection = await asyncio.wait_for(self._connect(), 10)
         channel = await self._connection.channel()  # publisher confirms on
         await declare_request_log_queue(channel, self._settings)
+        await declare_feedback_queue(channel, self._settings)
         publisher = await Publisher.create(channel)
         self.connected = True
         log.info("traffic_publisher_connected")
@@ -205,6 +218,7 @@ class TrafficEventPublisher:
 
     async def _build_message(self, pending: _Pending) -> Message:
         record = pending.record
+        assert record is not None  # ready-made events carry their message from the start
         if pending.size > _OFFLOAD_BYTES:
             payload = await asyncio.to_thread(build_event, record)  # masking can be heavy
         else:

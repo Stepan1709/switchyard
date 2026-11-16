@@ -95,6 +95,17 @@ def no_reference_model() -> GatewayError:
     )
 
 
+def budget_exceeded() -> GatewayError:
+    """The key has used its monthly budget. 429 like OpenAI's `insufficient_quota`, but it is
+    not worth retrying until the month changes or an administrator raises the limit."""
+    return GatewayError(
+        429,
+        "This API key has used its monthly budget. Ask an administrator to raise the limit.",
+        "insufficient_quota",
+        "budget_exceeded",
+    )
+
+
 def overloaded(provider: str) -> GatewayError:
     return GatewayError(
         503,

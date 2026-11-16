@@ -11,6 +11,7 @@ from app.core.errors import install_error_handlers
 from app.core.lifespan import make_lifespan
 from app.core.logging import configure_logging
 from app.core.middleware import CorrelationIdMiddleware
+from app.modules.analytics.router import router as analytics_router
 from app.modules.auth.router import router as auth_router
 from app.modules.calibration.router import router as calibration_router
 from app.modules.evaluation.router import router as evaluation_router
@@ -37,4 +38,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(calibration_router)
     app.include_router(evaluation_router)
     app.include_router(routing_router)
+    app.include_router(analytics_router)
     return app

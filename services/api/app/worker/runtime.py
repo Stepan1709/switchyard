@@ -14,7 +14,7 @@ import asyncio
 import contextlib
 import signal
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 
 import uvicorn
@@ -29,6 +29,7 @@ from app.core.logging import configure_logging, get_logger
 from app.core.messaging import Consumer, ConsumerSpec, Publisher
 from app.core.outbox import OutboxRelay
 from app.core.resources import Resources, open_resources
+from app.modules.analytics import budgets, usage
 from app.modules.traffic import partitions
 
 log = get_logger(__name__)
@@ -102,6 +103,21 @@ async def _maintenance(res: Resources, settings: Settings, stop: asyncio.Event) 
             await asyncio.wait_for(stop.wait(), MAINTENANCE_INTERVAL)
 
 
+async def _periodic(
+    name: str, interval: float, job: Callable[[], Awaitable[object]], stop: asyncio.Event
+) -> None:
+    """Run `job` every `interval` seconds until stopped. A failed run is logged and the next one
+    is tried later: the jobs are idempotent (they recompute from the logs), so skipping one is
+    harmless."""
+    while not stop.is_set():
+        try:
+            await job()
+        except Exception as exc:
+            log.error("periodic_job_failed", job=name, error=type(exc).__name__)
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stop.wait(), interval)
+
+
 async def run_worker(
     settings: Settings,
     specs_factory: SpecsFactory,
@@ -146,6 +162,26 @@ async def run_worker(
         )
         relay_task = asyncio.create_task(state.relay.run(), name="outbox-relay")
         maintenance_task = asyncio.create_task(_maintenance(res, settings, stop))
+        periodic_tasks = [
+            asyncio.create_task(
+                _periodic(
+                    "usage_recompute",
+                    settings.usage_recompute_interval,
+                    lambda: usage.recompute_recent(
+                        res.session_factory, settings.usage_recompute_days
+                    ),
+                    stop,
+                )
+            ),
+            asyncio.create_task(
+                _periodic(
+                    "budget_reconcile",
+                    settings.budget_reconcile_interval,
+                    lambda: budgets.reconcile(res.session_factory, res.redis),
+                    stop,
+                )
+            ),
+        ]
 
         config = uvicorn.Config(
             create_health_app(res, settings, state),
@@ -170,9 +206,10 @@ async def run_worker(
         )
         state.relay.stop()
         await relay_task
-        maintenance_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await maintenance_task
+        for task in (maintenance_task, *periodic_tasks):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         server.should_exit = True
         await server_task
         log.info("worker_stopped", seconds=round(time.monotonic() - started, 2))

@@ -26,6 +26,9 @@ class RunCreate(BaseModel):
     # run can say how many conversations a model would have got right at every step.
     # `sample_size` then counts conversations. Only for recorded traffic.
     sample_unit: Literal["request", "session"] = "request"
+    # Take requests whose recorded answer a user disliked first (up to half of the sample):
+    # they are where a cheaper model is most likely to be worse.
+    prefer_disliked: bool = False
     # Fixed seed = the same pool gives the same sample. Chosen at random when omitted (and
     # stored, so the run can still be reproduced).
     seed: int | None = Field(default=None, ge=0, lt=2**31)

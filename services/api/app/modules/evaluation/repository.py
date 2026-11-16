@@ -131,9 +131,16 @@ class EvaluationRepository:
             """
             SELECT r.model_id, r.status, r.prompt_tokens, r.completion_tokens, r.ttft_ms,
                    r.latency_ms, r.cost_usd,
-                   e.status AS eval_status, e.quality, e.passed, e.valid_schema,
-                   e.valid_args, e.basis, e.judge_cost_usd, s.session_id
+                   CASE WHEN h.verdict IS NOT NULL THEN 'ok' ELSE e.status END AS eval_status,
+                   CASE WHEN h.verdict IS NOT NULL
+                        THEN CASE WHEN h.verdict = 'pass' THEN 1.0 ELSE 0.0 END
+                        ELSE e.quality END AS quality,
+                   CASE WHEN h.verdict IS NOT NULL THEN h.verdict = 'pass'
+                        ELSE e.passed END AS passed,
+                   e.valid_schema, e.valid_args, e.basis, e.judge_cost_usd, s.session_id
             FROM run_results r LEFT JOIN evaluations e ON e.result_id = r.id
+            LEFT JOIN LATERAL (SELECT verdict FROM human_verdicts v WHERE v.result_id = r.id
+                               ORDER BY v.created_at DESC LIMIT 1) h ON true
             LEFT JOIN run_samples s ON s.run_id = r.run_id AND s.request_id = r.request_id
             WHERE r.run_id = :run_id
             """

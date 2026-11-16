@@ -50,6 +50,11 @@ class RouteTarget:
     auth_type: str
     api_key_encrypted: str | None
     context_window: int
+    # Prices of the moment (decimal strings), so the gateway can cost a request without
+    # touching the database. A server paid by the month has none: its cost per request is 0.
+    cost_type: str = "per_token"
+    price_input_per_1m: str | None = None
+    price_output_per_1m: str | None = None
 
 
 @dataclass(frozen=True)
@@ -74,6 +79,7 @@ class KeyInfo:
     project_id: str
     default_task_type: str | None
     rate_limit_rpm: int | None
+    monthly_budget_usd: str | None = None  # decimal string; None = no budget
 
 
 @dataclass(frozen=True)
@@ -149,6 +155,7 @@ def _version_of(content: dict[str, Any]) -> str:
 _KEYS_SQL = text(
     """
     SELECT k.id, k.prefix, k.secret_hash, k.project_id, k.default_task_type, k.rate_limit_rpm,
+           k.monthly_budget_usd,
            p.name AS project_name, p.reference_model_id, p.store_bodies, p.mask_pii
     FROM api_keys k JOIN projects p ON p.id = k.project_id
     WHERE k.revoked_at IS NULL
@@ -156,10 +163,13 @@ _KEYS_SQL = text(
 )
 _MODELS_SQL = text(
     """
-    SELECT m.id, m.name, m.context_window, m.enabled AS model_enabled,
+    SELECT m.id, m.name, m.context_window, m.enabled AS model_enabled, m.cost_type,
+           pp.input_per_1m, pp.output_per_1m,
            pr.id AS provider_id, pr.name AS provider_name, pr.base_url, pr.is_local,
            pr.auth_type, pr.api_key_encrypted, pr.enabled AS provider_enabled
     FROM models m JOIN providers pr ON pr.id = m.provider_id
+    LEFT JOIN model_prices pp ON pp.model_id = m.id AND pp.valid_from <= now()
+                              AND (pp.valid_to IS NULL OR pp.valid_to > now())
     """
 )
 
@@ -206,6 +216,9 @@ async def build_snapshot(session: AsyncSession) -> Snapshot:
             auth_type=m["auth_type"],
             api_key_encrypted=m["api_key_encrypted"],
             context_window=m["context_window"],
+            cost_type=m["cost_type"],
+            price_input_per_1m=None if m["input_per_1m"] is None else str(m["input_per_1m"]),
+            price_output_per_1m=None if m["output_per_1m"] is None else str(m["output_per_1m"]),
         )
 
     by_name: dict[str, str] = {}
@@ -241,6 +254,9 @@ async def build_snapshot(session: AsyncSession) -> Snapshot:
             project_id=pid,
             default_task_type=k["default_task_type"],
             rate_limit_rpm=k["rate_limit_rpm"],
+            monthly_budget_usd=(
+                None if k["monthly_budget_usd"] is None else str(k["monthly_budget_usd"])
+            ),
         )
         ref = k["reference_model_id"]
         projects[pid] = ProjectInfo(

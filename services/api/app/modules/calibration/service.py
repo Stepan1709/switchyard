@@ -211,7 +211,12 @@ class CalibrationService:
             )
         if data.source in ("labeled", "both"):
             pool += await self.repo.labeled_pool(project_id, data.task_type)
-        chosen = sampling.choose(pool, data.sample_size, data.strategy, seed)
+        if data.prefer_disliked:
+            chosen = sampling.choose_with_priority(
+                pool, data.sample_size, data.strategy, seed, self.settings.dislike_priority_share
+            )
+        else:
+            chosen = sampling.choose(pool, data.sample_size, data.strategy, seed)
         if not chosen:
             raise Unprocessable(
                 "There is nothing to replay: no suitable recorded requests or labelled examples"

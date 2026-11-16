@@ -315,6 +315,51 @@ aggregates add the share of conversations in which every step passed, with a Wil
 changes everything after it. The check `tool_args_valid` (and the always-recorded `valid_args`) tells whether the tool calls of an
 answer fit the tools the request offered: a known tool, arguments that match its parameter schema. It needs no reference answer.
 
+## Analytics, feedback and budgets
+
+**What a request costs.** The gateway costs every request when it ends, from the tokens the provider reported and the prices of
+the moment (kept in the snapshot, so no database is touched), and stores two numbers in the traffic log: `cost_usd` and
+`reference_cost_usd`, what the same tokens would have cost on the project's reference model. A server paid by the month adds
+nothing per request; its price is shared out in the reports.
+
+**Daily summaries.** `usage_daily` (day x project x model x task type: requests, errors, tokens, cost, reference cost and a
+latency histogram) and `utilization_daily` are rebuilt from the log by the worker every few minutes for the latest days, and on
+demand (`POST /projects/{id}/analytics/recompute`). Both are upserts, so rebuilding a day twice changes nothing, and a day whose
+log has already been dropped by retention keeps its summary.
+
+**Reports** (`GET /projects/{id}/analytics/...`): `overview?month=2026-11` (requests, share and cost per model and task type, the
+savings against the reference, the budgets of the keys, and what needs attention), `usage?group_by=day|model|task_type` (series for
+charts), `feedback`. Savings are the reference cost minus the effective cost; the effective cost of a server paid by the
+month is its price times the share of its requests that came from the project, so a server that is used little can show negative
+savings, and the report says so.
+
+**Own servers** (`GET /analytics/servers`). The load is the length of the *union* of the intervals in which the model handled a
+request, so a hundred parallel requests are still one busy second per second (a property tested with Hypothesis). Live traffic,
+calibration replays and shadow copies are counted separately and together. A model busy less than its `idle_threshold_pct` (or
+10% by default) is marked idle, and the money lost to idleness is the idle share of its monthly price. This is an
+approximation: a GPU that batches requests may have free capacity while it is "busy".
+
+**Ratings.** `POST /v1/feedback` takes `{"request_id", "rating": 1 | -1, "comment"}` with the client key and answers 202 at once.
+The gateway does not look anything up (it never needs the database): the worker checks that the request exists and belongs to
+the key's project, stores the rating with the model and task type of the answer the user saw, and drops anything else. Rating
+again replaces the rating. `GET .../analytics/feedback` gives the share of dislikes per model and task type with its confidence
+interval. **Rollback signal:** `GET .../task-types/{name}/rule-health` compares the dislikes of the answers given by the models of
+the active rule with those of the reference before it, and suggests a rollback only when enough people rated and the lower end of
+the interval is clearly above the old rate. It is a signal for a person: nothing is rolled back by itself.
+`POST /calibration-runs` with `prefer_disliked: true` fills up to half of the sample with requests whose recorded answer was
+disliked.
+
+**The judge and people.** A person can give a verdict on a replayed answer
+(`PUT .../calibration-runs/{run}/results/{result}/human-verdict`); it outranks the judge, and the numbers of the run are made
+again. `GET .../judge-agreement` reports how often the judge and people agree on the same answers and Cohen's kappa. Likes
+of live traffic are not used for this: they rate the answer the user saw, not the candidate's.
+
+**Budgets.** A key with `monthly_budget_usd` is refused with 429 `budget_exceeded` (type `insufficient_quota`) once the month's
+spending reaches it. The counter lives in Redis (integer millionths of a dollar); the cost is added after the answer, so
+requests already in flight when the limit is crossed still finish. The worker raises a counter that is below the traffic log (after a
+Redis restart) but never lowers it, because the log lags the gateway by a few seconds; `POST .../keys/{id}/budget/recount` sets it
+to exactly what the log says. If Redis is unavailable requests are let through.
+
 ## Repository layout
 
 ```

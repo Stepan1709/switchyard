@@ -194,6 +194,16 @@ class Settings(BaseSettings):
     shadow_queue: str = "worker.shadow"  # tests use a private queue per test
     shadow_prefetch: int = 8
 
+    # Analytics, feedback and budgets.
+    usage_recompute_interval: float = 300.0  # seconds between recomputing the recent days
+    usage_recompute_days: int = 2  # today and the days before it that are recomputed each time
+    budget_reconcile_interval: float = 300.0  # seconds between checks of the Redis counters
+    idle_default_threshold_pct: float = 10.0  # a model busy less than this is idle (no own value)
+    feedback_queue: str = "worker.feedback"  # tests use a private queue per test
+    feedback_min_for_signal: int = 20  # fewer ratings say nothing about a rule
+    feedback_signal_margin: float = 0.10  # dislikes this much above the baseline raise the signal
+    dislike_priority_share: float = 0.5  # share of a sample that disliked requests may take
+
     # Idempotency-Key for administrator POSTs.
     idempotency_ttl_hours: int = 24
     idempotency_lock_seconds: int = 120  # an in-progress claim older than this may be taken over

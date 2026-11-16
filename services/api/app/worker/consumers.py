@@ -4,6 +4,7 @@ from app.core.config import Settings
 from app.core.crypto import KeyRing
 from app.core.events import (
     CALIBRATION_RUN_FINISHED,
+    FEEDBACK_SUBMITTED,
     JUDGE_EXECUTE,
     REPLAY_EXECUTE,
     REQUEST_COMPLETED,
@@ -13,6 +14,7 @@ from app.core.messaging import ConsumerSpec
 from app.core.resources import Resources
 from app.modules.calibration.executor import ReplayExecutor
 from app.modules.evaluation.evaluator import EvaluationStarter, Evaluator
+from app.modules.feedback.writer import FeedbackWriter
 from app.modules.routing.shadow import ShadowExecutor
 from app.modules.traffic.writer import RequestLogWriter
 
@@ -54,6 +56,10 @@ def shadow_spec(executor: ShadowExecutor, settings: Settings) -> ConsumerSpec:
     )
 
 
+def feedback_spec(writer: FeedbackWriter, settings: Settings) -> ConsumerSpec:
+    return ConsumerSpec(settings.feedback_queue, [FEEDBACK_SUBMITTED], writer.handle)
+
+
 def build_consumers(res: Resources, settings: Settings) -> list[ConsumerSpec]:
     keyring = KeyRing.from_text(settings.master_keys.get_secret_value())
     return [
@@ -62,4 +68,5 @@ def build_consumers(res: Resources, settings: Settings) -> list[ConsumerSpec]:
         run_finished_spec(EvaluationStarter(res, settings), settings),
         judge_spec(Evaluator(res, settings, keyring), settings),
         shadow_spec(ShadowExecutor(res, settings, keyring), settings),
+        feedback_spec(FeedbackWriter(res.session_factory, settings), settings),
     ]
