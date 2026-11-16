@@ -157,6 +157,52 @@ async def test_a_recommendation_becomes_a_proposed_rule_that_changes_nothing_liv
     assert {t["name"]: t["mode"] for t in task}["classification"] == "record"  # nothing switched
 
 
+# ---- the matrix -------------------------------------------------------------------------------
+async def test_the_matrix_lists_every_model_with_the_numbers_of_the_latest_evaluated_run(
+    client, env, api_app, mock_llm, pipeline
+):
+    run = await evaluated_run(client, env, api_app, mock_llm, pipeline, min_pass_rate=0.5)
+    r = await client.get(f"/projects/{env.project_id}/matrix", headers=env.admin)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    names = {m["name"]: m for m in body["models"]}
+    assert {"mock-tiny", "mock-mid", "mock-strong"} <= set(names)
+    assert names["mock-strong"]["is_reference"] and not names["mock-tiny"]["is_reference"]
+    column = {c["task_type"]: c for c in body["columns"]}["classification"]
+    assert column["run_id"] == run["id"] and column["active_version"] is None
+    assert column["criteria"]["min_pass_rate"] == 0.5
+    cells = {c["model_id"]: c for c in body["cells"] if c["task_type"] == "classification"}
+    tiny = cells[env.candidates["tiny"]]
+    assert tiny["is_primary"] and tiny["eligible"] and not tiny["in_active_rule"]
+    assert tiny["latency_p95_ms"] is not None and tiny["n_total"] > 0
+
+
+async def test_the_matrix_marks_the_models_of_the_active_rule(
+    client, env, api_app, mock_llm, pipeline
+):
+    await evaluated_run(client, env, api_app, mock_llm, pipeline, min_pass_rate=0.5)
+    rule = await propose(client, env, "mid", "ref")
+    assert (await activate(client, env, rule, None)).status_code == 200
+    body = (await client.get(f"/projects/{env.project_id}/matrix", headers=env.admin)).json()
+    column = {c["task_type"]: c for c in body["columns"]}["classification"]
+    assert column["active_version"] == 1 and len(column["active_chain"]) == 2
+    marked = {c["model_id"] for c in body["cells"] if c["in_active_rule"]}
+    assert env.candidates["mid"] in marked and env.candidates["tiny"] not in marked
+
+
+async def test_the_matrix_of_a_project_without_runs_has_columns_but_no_cells(client, env):
+    body = (await client.get(f"/projects/{env.project_id}/matrix", headers=env.admin)).json()
+    assert body["cells"] == []
+    assert [c["run_id"] for c in body["columns"]] == [None]
+
+
+async def test_the_matrix_is_hidden_from_a_stranger(client, admin, env):
+    await make_admin(client, admin, "stranger@example.com", "admin")
+    stranger = bearer((await login(client, "stranger@example.com", GOOD_PASSWORD)).json())
+    r = await client.get(f"/projects/{env.project_id}/matrix", headers=stranger)
+    assert r.status_code == 404
+
+
 # ---- versions, activation, rollback -----------------------------------------------------------
 async def test_a_rule_is_proposed_then_activated_by_a_person(client, env, api_app):
     base = f"/projects/{env.project_id}"

@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% from "macros.html" import empty, field, csrf_field, status_badge %}
+{% block content %}
+<h1 class="mb-4 text-xl font-semibold">Calibrations</h1>
+
+<section class="card overflow-x-auto">
+  {% if runs %}
+  <table class="table">
+    <thead><tr><th>Started</th><th>Task type</th><th>Status</th><th>Progress</th><th>Models</th><th class="num">Sample</th><th></th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+      <tr>
+        <td class="whitespace-nowrap">{{ r.created_at|dt }}</td>
+        <td class="font-medium">{{ r.task_type }}</td>
+        <td>{{ status_badge(r.status) }}</td>
+        <td>{% if r.progress %}{{ r.progress.percent|decimal(0) }}%{% else %}–{% endif %}</td>
+        <td class="text-xs text-slate-600">{% for id in r.candidate_model_ids %}{{ names.get(id, "?") }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+        <td class="num">{{ r.samples_taken }} / {{ r.sample_size }}</td>
+        <td class="text-right"><a class="btn btn-sm" href="/runs/{{ r.id }}">Open</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  {% call empty("No calibrations yet", "A calibration replays recorded requests on other models and compares quality, speed and cost.") %}{% endcall %}
+  {% endif %}
+</section>
+
+{% if can_write %}
+<section class="card mt-6" x-data="{ judge: false }">
+  <h2 class="card-title">Start a calibration</h2>
+  {% if not reference %}
+  <div class="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">This project has no reference model. Choose one in <a class="underline" href="/projects">Projects</a>: its recorded answers are the baseline.</div>
+  {% endif %}
+  {% if not task_types %}
+  <p class="text-sm text-slate-500">No task types yet. They appear when your application sends requests with an <code>x-task-type</code> header.</p>
+  {% elif not candidates %}
+  <p class="text-sm text-slate-500">Register models to compare first (<a class="underline" href="/models">Models</a>).</p>
+  {% else %}
+  <form method="post" action="/runs" class="grid gap-4 lg:grid-cols-3">
+    {{ csrf_field() }}<input type="hidden" name="idem" value="{{ idem }}">
+    {{ field("task_type", "Task type", "", "select", options=task_options) }}
+    <fieldset class="lg:col-span-2">
+      <legend class="label">Models to compare</legend>
+      <div class="flex flex-wrap gap-x-4 gap-y-1">
+        {% for m in candidates %}
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="candidate_model_ids" value="{{ m.id }}" class="rounded border-slate-300"> {{ m.label }}</label>
+        {% endfor %}
+      </div>
+      <p class="hint">Compared with the recorded answers of the reference{% if reference %} ({{ reference }}){% endif %}.</p>
+    </fieldset>
+
+    {{ field("sample_size", "How many requests", "100", "number", required=True, attrs='min="1"', hint="Each request is replayed on every model.") }}
+    {{ field("strategy", "Sampling", "random", "select", options=[("random", "Random"), ("stratified", "Stratified (short and long, with and without tools)")]) }}
+    {{ field("source", "Examples from", "traffic", "select", options=[("traffic", "Recorded traffic"), ("labeled", "Imported labelled set"), ("both", "Both")]) }}
+    {{ field("sample_unit", "Sample unit", "request", "select", options=[("request", "Single requests"), ("session", "Whole conversations (agents)")]) }}
+    {{ field("seed", "Seed", kind="number", hint="Empty = random. The same seed picks the same sample.") }}
+    <div class="flex items-end pb-2">{{ field("prefer_disliked", "Take disliked requests first", kind="checkbox") }}</div>
+
+    <div class="lg:col-span-3 border-t pt-4"><h3 class="mb-2 text-sm font-semibold">Thresholds for a recommendation</h3></div>
+    {{ field("min_pass_rate_pct", "Pass rate at least, %", "90", "number", attrs='min="0" max="100" step="1"') }}
+    {{ field("max_error_rate_pct", "Errors at most, %", "5", "number", attrs='min="0" max="100" step="1"') }}
+    {{ field("min_quality", "Quality at least (0-1)", kind="number", attrs='min="0" max="1" step="0.05"', hint="Optional") }}
+    {{ field("max_p95_ms", "Latency p95 at most, ms", kind="number", attrs='min="1"', hint="Optional") }}
+
+    <div class="lg:col-span-3 border-t pt-4"><h3 class="mb-2 text-sm font-semibold">Budget (the run stops when it is spent)</h3></div>
+    {{ field("max_requests", "Provider calls at most", kind="number", attrs='min="1"', hint="Optional") }}
+    {{ field("max_cost_usd", "Cost at most, USD", kind="number", attrs='min="0" step="0.01"', hint="Optional") }}
+
+    <div class="lg:col-span-3 border-t pt-4">
+      <label class="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" class="rounded border-slate-300" x-model="judge"> Use a judge model for answers that differ from the reference</label>
+    </div>
+    <div x-show="judge" x-cloak class="grid gap-4 lg:col-span-3 lg:grid-cols-3">
+      <div>
+        <label class="label" for="f-judge_model_id">Judge</label>
+        <select id="f-judge_model_id" name="judge_model_id" class="input" :disabled="!judge">
+          <option value="">(none)</option>
+          {% for m in candidates %}<option value="{{ m.id }}">{{ m.label }}</option>{% endfor %}
+        </select>
+        <p class="hint">It must not be one of the compared models or the reference.</p>
+      </div>
+      <div class="flex items-end pb-2">{{ field("judge_pairwise", "Compare both answers side by side", kind="checkbox") }}</div>
+    </div>
+
+    <div class="lg:col-span-3"><button class="btn btn-primary" type="submit">Start calibration</button></div>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

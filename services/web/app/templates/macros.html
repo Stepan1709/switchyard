@@ -1,0 +1,55 @@
+{# Small building blocks shared by the pages. #}
+
+{% macro stat(label, value, hint="", tone="") %}
+<div class="card">
+  <div class="text-xs font-medium uppercase tracking-wide text-slate-500">{{ label }}</div>
+  <div class="mt-1 text-2xl font-semibold {% if tone == 'good' %}text-emerald-700{% elif tone == 'bad' %}text-red-700{% endif %}">{{ value }}</div>
+  {% if hint %}<div class="mt-0.5 text-xs text-slate-500">{{ hint }}</div>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro empty(title, text="") %}
+<div class="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-10 text-center">
+  <div class="text-sm font-medium text-slate-700">{{ title }}</div>
+  {% if text %}<div class="mx-auto mt-1 max-w-md text-sm text-slate-500">{{ text }}</div>{% endif %}
+  {{ caller() if caller else "" }}
+</div>
+{% endmacro %}
+
+{% macro status_badge(value) %}
+{% set tone = {
+  "active": "green", "completed": "green", "done": "green", "ok": "green", "proposed": "blue",
+  "running": "blue", "paused": "amber", "pending": "gray", "superseded": "gray",
+  "cancelled": "gray", "rejected": "gray", "rolled_back": "amber",
+  "budget_exceeded": "red", "error": "red", "failed": "red"
+}.get(value, "gray") %}
+<span class="badge badge-{{ tone }}">{{ value|replace("_", " ") }}</span>
+{% endmacro %}
+
+{# A form field. kind: text | number | password | select | checkbox | textarea #}
+{% macro field(name, label, value="", kind="text", hint="", required=False, options=None, attrs="") %}
+<div>
+  {% if kind == "checkbox" %}
+  <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="{{ name }}" value="1" {% if value %}checked{% endif %} class="rounded border-slate-300"> {{ label }}</label>
+  {% elif kind == "select" %}
+  <label class="label" for="f-{{ name }}">{{ label }}</label>
+  <select id="f-{{ name }}" name="{{ name }}" class="input" {% if required %}required{% endif %} {{ attrs|safe }}>
+    {% for val, text in options or [] %}<option value="{{ val }}" {% if val|string == value|string %}selected{% endif %}>{{ text }}</option>{% endfor %}
+  </select>
+  {% elif kind == "textarea" %}
+  <label class="label" for="f-{{ name }}">{{ label }}</label>
+  <textarea id="f-{{ name }}" name="{{ name }}" rows="3" class="input" {% if required %}required{% endif %} {{ attrs|safe }}>{{ value }}</textarea>
+  {% else %}
+  <label class="label" for="f-{{ name }}">{{ label }}</label>
+  <input id="f-{{ name }}" type="{{ kind }}" name="{{ name }}" value="{{ value }}" class="input" {% if required %}required{% endif %} {{ attrs|safe }}>
+  {% endif %}
+  {% if hint %}<p class="hint">{{ hint }}</p>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro csrf_field() %}<input type="hidden" name="csrf_token" value="{{ csrf }}">{% endmacro %}
+
+{# A small chart: the data travels in a JSON block that static/js/charts.js reads. #}
+{% macro chart(id, config, height="h-64") %}
+<div class="{{ height }}"><canvas id="{{ id }}" data-chart="{{ config|tojson|forceescape }}"></canvas></div>
+{% endmacro %}

@@ -1,0 +1,53 @@
+[project]
+name = "switchyard-web"
+version = "0.1.0"
+description = "Switchyard: admin web interface (server-rendered, talks to the api over HTTP)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi==0.162.5",
+    "httpx==0.28.1",
+    "jinja2==3.1.6",
+    "pydantic-settings==2.16.2",
+    "python-multipart==0.0.34",
+    "redis==8.1.0",
+    "structlog==26.1.0",
+    "uvicorn==0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "asgi-lifespan==2.1.0",
+    "mypy==2.4.1",
+    "pytest==9.2.0",
+    "pytest-asyncio==1.4.1.post1",
+    "pytest-cov==7.1.0",
+    "testcontainers==4.15.0",
+    "ruff==0.17.4",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "--cov=app --cov-report=term-missing"
+markers = ["integration: runs the real api against Postgres, Redis and RabbitMQ in containers"]
+
+[tool.coverage.run]
+branch = true
+source = ["app"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_untyped_decorators = false
+disallow_untyped_calls = false
+disallow_incomplete_defs = false
+check_untyped_defs = true

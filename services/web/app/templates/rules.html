@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% from "macros.html" import empty, field, csrf_field, status_badge %}
+{% block content %}
+<h1 class="mb-1 text-xl font-semibold">Rules</h1>
+<p class="mb-4 text-sm text-slate-500">A rule says which model answers a task type, with fallbacks. Nothing changes until a person activates a version.</p>
+
+{% if not cards %}
+{% call empty("No task types yet", "Task types appear when your application sends requests with an x-task-type header.") %}{% endcall %}
+{% endif %}
+
+{% for c in cards %}
+{% set task = c.task %}
+<section class="card mb-6 scroll-mt-4" id="{{ task.name }}">
+  <div class="mb-3 flex flex-wrap items-center gap-3">
+    <h2 class="text-lg font-semibold">{{ task.name }}</h2>
+    <span class="badge {% if task.mode == 'route' %}badge-green{% elif task.mode == 'shadow' %}badge-blue{% else %}badge-gray{% endif %}">{{ task.mode }}</span>
+    {% if task.mode == "shadow" %}<span class="text-xs text-slate-500">{{ (task.shadow_rate * 100)|round|int }}% of traffic copied to {{ c.shadow_names|join(", ") or "nobody" }}</span>{% endif %}
+  </div>
+
+  <div class="grid gap-4 lg:grid-cols-2">
+    <div>
+      <h3 class="card-title">Live rule</h3>
+      {% if c.active %}
+      <div class="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm">
+        <div class="flex flex-wrap items-center gap-2"><strong>Version {{ c.active.version }}</strong> {{ status_badge("active") }} <span class="text-xs text-slate-500">since {{ c.active.activated_at|dt }}</span></div>
+        <ol class="mt-2 list-decimal pl-5">{% for n in c.active.chain_names %}<li>{{ n }}{% if loop.first %} <span class="text-xs text-slate-500">(first choice)</span>{% endif %}</li>{% endfor %}</ol>
+        {% if c.active.note %}<p class="mt-1 text-xs text-slate-600">{{ c.active.note }}</p>{% endif %}
+        {% if task.mode != "route" %}<p class="mt-2 text-xs text-amber-800">The mode is "{{ task.mode }}", so this rule is not applied. Switch to "route" to use it.</p>{% endif %}
+      </div>
+      {% if c.health %}
+      <div class="mt-2 rounded-md border px-3 py-2 text-sm {% if c.health.suggest_rollback %}border-amber-300 bg-amber-50{% else %}border-slate-200{% endif %}">
+        {% if c.health.suggest_rollback %}<span class="badge badge-amber">consider a rollback</span>{% else %}<span class="badge badge-green">no sign of trouble</span>{% endif %}
+        <span class="text-xs text-slate-600">{{ c.health.reason }}</span>
+      </div>
+      {% endif %}
+      {% if can_write and c.has_previous %}
+      <form method="post" action="/rules/task/{{ task.name }}/rollback" class="mt-2" x-data @submit="if (!confirm('Go back to the previous version?')) $event.preventDefault()">
+        {{ csrf_field() }}<button class="btn btn-sm" type="submit">Roll back to the previous version</button></form>
+      {% endif %}
+      {% else %}
+      <p class="rounded-md border border-dashed border-slate-300 p-3 text-sm text-slate-500">No live rule: every request goes to the reference model.</p>
+      {% endif %}
+    </div>
+
+    <div>
+      <h3 class="card-title">Proposed</h3>
+      {% for r in c.proposed %}
+      <div class="mb-2 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
+        <div class="flex flex-wrap items-center gap-2"><strong>Version {{ r.version }}</strong> {{ status_badge("proposed") }} <span class="text-xs text-slate-500">{{ r.created_at|dt }}</span></div>
+        <ol class="mt-1 list-decimal pl-5">{% for n in r.chain_names %}<li>{{ n }}</li>{% endfor %}</ol>
+        {% if r.note %}<p class="mt-1 text-xs text-slate-600">{{ r.note }}</p>{% endif %}
+        {% if r.source_run_id %}<a class="text-xs underline" href="/runs/{{ r.source_run_id }}">Based on a calibration</a>{% endif %}
+        {% if can_write %}
+        <div class="mt-2 flex gap-2">
+          <form method="post" action="/rules/{{ r.id }}/activate" x-data @submit="if (!confirm('Make this version live for {{ task.name }}?')) $event.preventDefault()">
+            {{ csrf_field() }}<input type="hidden" name="task" value="{{ task.name }}"><input type="hidden" name="expected" value="{{ c.active.version if c.active else '' }}"><input type="hidden" name="idem" value="{{ idem }}-{{ r.id }}">
+            <button class="btn btn-sm btn-primary" type="submit">Activate</button></form>
+          <form method="post" action="/rules/{{ r.id }}/reject">{{ csrf_field() }}<input type="hidden" name="task" value="{{ task.name }}"><button class="btn btn-sm" type="submit">Reject</button></form>
+        </div>
+        {% endif %}
+      </div>
+      {% else %}
+      <p class="text-sm text-slate-500">Nothing proposed. Start a <a class="underline" href="/runs">calibration</a> or write a rule below.</p>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% if can_write %}
+  <div class="mt-4 grid gap-4 border-t pt-4 lg:grid-cols-2">
+    <form method="post" action="/rules/task/{{ task.name }}/mode" class="space-y-3" x-data="{ mode: '{{ task.mode }}' }">
+      {{ csrf_field() }}
+      <h3 class="card-title !mb-0">Mode</h3>
+      <div class="flex flex-wrap gap-4 text-sm">
+        {% for m in modes %}<label class="flex items-center gap-1"><input type="radio" name="mode" value="{{ m }}" x-model="mode" {% if task.mode == m %}checked{% endif %}> {{ m }}</label>{% endfor %}
+      </div>
+      <p class="hint"><strong>record</strong>: everything goes to the reference. <strong>shadow</strong>: the reference answers, a share of traffic is copied to other models in the background. <strong>route</strong>: the live rule decides.</p>
+      <div x-show="mode === 'shadow'" x-cloak class="space-y-2">
+        <div class="flex flex-wrap gap-3">
+          {% for m in models %}<label class="flex items-center gap-1 text-sm"><input type="checkbox" name="shadow_model_ids" value="{{ m.id }}" {% if m.id in task.shadow_model_ids %}checked{% endif %}> {{ m.name }}</label>{% endfor %}
+        </div>
+        {{ field("shadow_rate_pct", "Share of traffic copied, %", (task.shadow_rate * 100)|round|int, "number", attrs='min="0" max="100"') }}
+      </div>
+      <button class="btn btn-sm" type="submit">Save mode</button>
+    </form>
+
+    <form method="post" action="/rules/task/{{ task.name }}/create" class="space-y-2">
+      {{ csrf_field() }}
+      <h3 class="card-title !mb-0">Write a rule by hand</h3>
+      <div class="grid gap-2 sm:grid-cols-3">
+        {{ field("first", "First choice", "", "select", required=True, options=model_options[1:]) }}
+        {{ field("second", "Fallback", "", "select", options=model_options) }}
+        {{ field("third", "Second fallback", "", "select", options=model_options) }}
+      </div>
+      {{ field("note", "Note", attrs='maxlength="500"') }}
+      <button class="btn btn-sm" type="submit">Propose</button>
+    </form>
+  </div>
+  {% endif %}
+
+  {% if c.history %}
+  <details class="mt-4">
+    <summary class="cursor-pointer text-sm font-medium text-brand-700">History ({{ c.history|length }})</summary>
+    <table class="table mt-2">
+      <thead><tr><th>Version</th><th>Status</th><th>Models</th><th>Live</th><th>Note</th></tr></thead>
+      <tbody>
+      {% for r in c.history %}
+        <tr><td>{{ r.version }}</td><td>{{ status_badge(r.status) }}</td><td>{{ r.chain_names|join(" → ") }}</td>
+            <td class="text-xs text-slate-500">{% if r.activated_at %}{{ r.activated_at|dt }} – {{ r.retired_at|dt }}{% else %}never{% endif %}</td><td class="text-xs">{{ r.note or "" }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+</section>
+{% endfor %}
+{% endblock %}

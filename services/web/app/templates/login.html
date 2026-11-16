@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" class="h-full bg-slate-50">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · Switchyard</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="min-h-full text-slate-800">
+<div class="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-4">
+  <div class="mb-6 text-center">
+    <div class="text-2xl font-bold text-brand-700">Switchyard</div>
+    <div class="text-sm text-slate-500">Record, compare and route LLM traffic</div>
+  </div>
+  <form method="post" action="/login" class="card space-y-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="next" value="{{ next }}">
+    {% if error %}<div class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">{{ error }}</div>{% endif %}
+    <div>
+      <label class="label" for="email">Email</label>
+      <input id="email" name="email" type="email" class="input" required autofocus autocomplete="username">
+    </div>
+    <div>
+      <label class="label" for="password">Password</label>
+      <input id="password" name="password" type="password" class="input" required autocomplete="current-password">
+    </div>
+    <button class="btn btn-primary w-full" type="submit">Sign in</button>
+  </form>
+</div>
+</body>
+</html>

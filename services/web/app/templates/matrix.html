@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% from "macros.html" import empty %}
+{% block content %}
+<div class="mb-4 flex flex-wrap items-end justify-between gap-2">
+  <div>
+    <h1 class="text-xl font-semibold">Models × task types</h1>
+    <p class="text-sm text-slate-500">Numbers come from the newest evaluated calibration of each task type. Click a cell to see the answers behind it.</p>
+  </div>
+</div>
+
+{% if not matrix.tasks %}
+{% call empty("No task types yet", "Task types appear when the application sends requests with an x-task-type header.") %}{% endcall %}
+{% elif not matrix.models %}
+{% call empty("No models registered", "Add providers and models first.") %}<a class="btn btn-primary mt-3" href="/models">Models and providers</a>{% endcall %}
+{% else %}
+<script type="application/json" id="matrix-data">{{ matrix|tojson }}</script>
+<div x-data="matrix()" class="relative">
+  <div class="card mb-3 flex flex-wrap items-end gap-3">
+    <div>
+      <label class="label" for="m-search">Model</label>
+      <input id="m-search" type="search" class="input !w-44" placeholder="Search" x-model="search">
+    </div>
+    <div>
+      <label class="label" for="m-cost">Pricing</label>
+      <select id="m-cost" class="input !w-40" x-model="costType">
+        <option value="">All</option><option value="per_token">Per token</option><option value="fixed_monthly">Own server</option>
+      </select>
+    </div>
+    <div>
+      <label class="label" for="m-metric">Show</label>
+      <select id="m-metric" class="input !w-44" x-model="metric">
+        <template x-for="(m, key) in metrics" :key="key"><option :value="key" x-text="m.label"></option></template>
+      </select>
+    </div>
+    <label class="flex items-center gap-2 pb-2 text-sm"><input type="checkbox" class="rounded border-slate-300" x-model="onlyEligible"> Passing only</label>
+    <label class="flex items-center gap-2 pb-2 text-sm"><input type="checkbox" class="rounded border-slate-300" x-model="onlyMeasured"> Measured only</label>
+    <div class="ml-auto flex flex-wrap items-center gap-3 pb-2 text-xs text-slate-500">
+      <span class="flex items-center gap-1"><span class="inline-block h-3 w-3 rounded border border-emerald-300 bg-emerald-50"></span> meets thresholds</span>
+      <span class="flex items-center gap-1"><span class="inline-block h-3 w-3 rounded border border-red-300 bg-red-50"></span> rejected</span>
+      <span class="flex items-center gap-1"><span class="inline-block h-3 w-3 rounded border border-amber-300 bg-amber-50"></span> few examples</span>
+      <span>★ recommended · ● in the live rule</span>
+    </div>
+  </div>
+
+  <div class="card overflow-x-auto !p-0">
+    <table class="table min-w-full">
+      <thead>
+        <tr>
+          <th class="sticky left-0 bg-white">Model</th>
+          <template x-for="task in data.tasks" :key="task.name">
+            <th class="min-w-44">
+              <button type="button" class="flex items-center gap-1 font-semibold uppercase" @click="sortBy(task.name)" :title="'Sort by ' + task.name">
+                <span x-text="task.name"></span>
+                <span class="text-brand-600" x-show="sortTask === task.name" x-text="desc ? '▼' : '▲'"></span>
+              </button>
+              <span class="badge badge-gray normal-case" x-text="task.mode"></span>
+              <span class="badge badge-blue normal-case" x-show="task.version" x-text="'rule v' + task.version"></span>
+              <span class="block text-[11px] font-normal normal-case text-slate-400" x-show="!task.measured">not calibrated</span>
+            </th>
+          </template>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="row in rows" :key="row.id">
+          <tr>
+            <td class="sticky left-0 bg-white font-medium">
+              <span x-text="row.name"></span>
+              <span class="badge badge-gray" x-show="row.cost_type === 'fixed_monthly'">server</span>
+              <span class="badge badge-blue" x-show="row.is_reference">reference</span>
+              <span class="badge badge-gray" x-show="!row.enabled">disabled</span>
+              <div class="text-xs font-normal text-slate-400" x-text="'tier ' + row.tier"></div>
+            </td>
+            <template x-for="task in data.tasks" :key="task.name">
+              <td>
+                <template x-if="row.cells[task.name]">
+                  <button type="button" class="w-full rounded-md border px-2 py-1.5 text-left hover:shadow" :class="cellClass(row.cells[task.name])"
+                          :title="title(row.cells[task.name])" @click="open(row, task, row.cells[task.name])">
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="text-base font-semibold" x-text="value(row.cells[task.name])"></span>
+                      <span class="text-xs">
+                        <span x-show="row.cells[task.name].is_primary" title="Recommended">★</span>
+                        <span x-show="row.cells[task.name].in_active_rule" class="text-brand-600" title="In the live rule">●</span>
+                      </span>
+                    </div>
+                    <div class="text-[11px] opacity-80" x-text="detail(row.cells[task.name])"></div>
+                  </button>
+                </template>
+                <template x-if="!row.cells[task.name]">
+                  <div class="rounded-md border border-dashed border-slate-200 px-2 py-1.5 text-center text-slate-400" x-text="row.is_reference ? 'baseline' : '–'"></div>
+                </template>
+              </td>
+            </template>
+          </tr>
+        </template>
+        <tr x-show="rows.length === 0"><td :colspan="data.tasks.length + 1" class="py-8 text-center text-sm text-slate-500">No models match the filters.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div x-show="panel" x-cloak class="fixed inset-0 z-20 flex justify-end bg-slate-900/30" @keydown.escape.window="panel = false" @click.self="panel = false">
+    <aside class="h-full w-full max-w-2xl overflow-y-auto bg-white shadow-xl" role="dialog" aria-label="Cell details">
+      <div class="sticky top-0 flex justify-end border-b bg-white p-2"><button type="button" class="btn btn-sm" @click="panel = false">Close</button></div>
+      <div id="cell-panel-body"></div>
+    </aside>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

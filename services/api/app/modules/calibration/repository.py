@@ -72,6 +72,21 @@ class CalibrationRepository:
         )
         return list((await self.session.execute(stmt)).scalars())
 
+    async def latest_evaluated_runs(self, project_id: uuid.UUID) -> list[CalibrationRun]:
+        """The newest run with finished evaluation for each task type of the project."""
+        stmt = (
+            select(CalibrationRun)
+            .where(
+                CalibrationRun.project_id == project_id,
+                CalibrationRun.evaluation_status == "done",
+            )
+            .distinct(CalibrationRun.task_type)
+            .order_by(
+                CalibrationRun.task_type, CalibrationRun.created_at.desc(), CalibrationRun.id.desc()
+            )
+        )
+        return list((await self.session.execute(stmt)).scalars())
+
     async def transition(
         self,
         run_id: uuid.UUID,
@@ -396,8 +411,11 @@ class CalibrationRepository:
         status: str | None,
         after: uuid.UUID | None,
         limit: int,
+        request_id: uuid.UUID | None = None,
     ) -> list[RunResult]:
         stmt = select(RunResult).where(RunResult.run_id == run_id)
+        if request_id is not None:
+            stmt = stmt.where(RunResult.request_id == request_id)
         if model_id is not None:
             stmt = stmt.where(RunResult.model_id == model_id)
         if status is not None:

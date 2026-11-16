@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% from "macros.html" import stat, empty, chart %}
+{% block content %}
+<div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+  <h1 class="text-xl font-semibold">Overview</h1>
+  <div class="flex items-center gap-2 text-sm">
+    <a class="btn btn-sm" href="/overview?month={{ prev_month }}">&larr;</a>
+    <span class="font-medium">{{ month }}</span>
+    {% if next_month %}<a class="btn btn-sm" href="/overview?month={{ next_month }}">&rarr;</a>{% endif %}
+  </div>
+</div>
+
+{% set t = data.totals %}
+{% if t.requests == 0 %}
+{% call empty("No traffic in " ~ month, "Point your application at the gateway (change base_url) and send requests with an x-task-type header. They will show up here within a minute.") %}{% endcall %}
+{% else %}
+<div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+  {{ stat("Requests", t.requests|num, t.errors|string ~ " errors") }}
+  {{ stat("Cost", t.effective_cost_usd|money, "per token " ~ (t.cost_usd|money) ~ " + servers " ~ (t.fixed_cost_usd|money)) }}
+  {{ stat("Same traffic on the reference", t.reference_cost_usd|money) }}
+  {{ stat("Savings", t.savings_usd|money, (t.savings_pct|pct_points ~ " cheaper") if t.savings_pct is not none else "", "good" if t.savings_usd|float > 0 else ("bad" if t.savings_usd|float < 0 else "")) }}
+</div>
+
+{% if data.problems %}
+<section class="card mt-4">
+  <h2 class="card-title">Needs attention</h2>
+  <ul class="space-y-2 text-sm">
+    {% for p in data.problems %}
+    <li class="flex items-start gap-2">
+      <span class="badge {% if p.kind == 'budget_exhausted' %}badge-red{% else %}badge-amber{% endif %}">{{ p.kind|replace("_", " ") }}</span>
+      <span><strong>{{ p.subject }}</strong>: {{ p.detail }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<div class="mt-4 grid gap-4 lg:grid-cols-3">
+  <section class="card lg:col-span-2">
+    <h2 class="card-title">Cost by day</h2>
+    {% if cost_chart %}{{ chart("cost-chart", cost_chart) }}{% else %}<p class="text-sm text-slate-500">No data yet.</p>{% endif %}
+  </section>
+  <section class="card">
+    <h2 class="card-title">Share of requests</h2>
+    {% if share_chart %}{{ chart("share-chart", share_chart) }}{% endif %}
+  </section>
+</div>
+
+<section class="card mt-4 overflow-x-auto">
+  <h2 class="card-title">Models</h2>
+  <table class="table">
+    <thead><tr><th>Model</th><th class="num">Share</th><th class="num">Requests</th><th class="num">Tokens in / out</th><th class="num">Cost</th><th class="num">Per request</th><th class="num">Latency</th></tr></thead>
+    <tbody>
+    {% for m in data.models %}
+      <tr>
+        <td class="font-medium">{{ m.name }} {% if m.cost_type == "fixed_monthly" %}<span class="badge badge-gray">server</span>{% endif %}</td>
+        <td class="num">{{ m.share|pct }}</td>
+        <td class="num">{{ m.requests|num }}</td>
+        <td class="num">{{ m.prompt_tokens|num }} / {{ m.completion_tokens|num }}</td>
+        <td class="num">{{ m.effective_cost_usd|money }}</td>
+        <td class="num">{{ m.effective_cost_per_request_usd|money }}</td>
+        <td class="num">{{ m.avg_latency_ms|ms }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<div class="mt-4 grid gap-4 lg:grid-cols-2">
+  <section class="card overflow-x-auto">
+    <h2 class="card-title">Task types</h2>
+    <table class="table">
+      <thead><tr><th>Task type</th><th class="num">Requests</th><th class="num">Cost</th><th class="num">Savings</th></tr></thead>
+      <tbody>
+      {% for task in data.task_types %}
+        <tr><td class="font-medium">{{ task.task_type }}</td><td class="num">{{ task.requests|num }}</td><td class="num">{{ task.effective_cost_usd|money }}</td>
+            <td class="num {% if task.savings_usd|float < 0 %}text-red-700{% endif %}">{{ task.savings_usd|money }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <section class="card overflow-x-auto">
+    <h2 class="card-title">Key budgets</h2>
+    {% if data["keys"] %}
+    <table class="table">
+      <thead><tr><th>Key</th><th class="num">Spent</th><th class="num">Budget</th><th>Used</th></tr></thead>
+      <tbody>
+      {% for k in data["keys"] %}
+        <tr>
+          <td class="font-medium">{{ k.name }}</td>
+          <td class="num">{{ k.spent_usd|money }}</td>
+          <td class="num">{{ k.monthly_budget_usd|money if k.monthly_budget_usd is not none else "no limit" }}</td>
+          <td class="w-32">{% if k.used_pct is not none %}
+            <div class="h-2 w-full overflow-hidden rounded bg-slate-100"><div class="h-2 {% if k.exhausted %}bg-red-500{% elif k.used_pct > 80 %}bg-amber-500{% else %}bg-brand-500{% endif %}" style="width: {{ [k.used_pct, 100]|min }}%"></div></div>
+            <span class="text-xs text-slate-500">{{ k.used_pct|pct_points(0) }}</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="text-sm text-slate-500">No keys yet.</p>{% endif %}
+  </section>
+</div>
+{% endif %}
+{% endblock %}

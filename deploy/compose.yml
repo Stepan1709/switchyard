@@ -233,6 +233,34 @@ services:
       resources:
         limits: {cpus: "0.5", memory: 256M}
 
+  # The admin interface (server-rendered pages). It talks to api over HTTP and keeps the
+  # sessions in Redis; the browser only ever holds a random session id. It has no database
+  # access and no provider or signing secrets: just the Redis password.
+  web:
+    build:
+      context: ../services/web
+    image: switchyard-web:local
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 15s
+    depends_on:
+      api: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    secrets: [redis_password]
+    networks: [data]
+    environment:
+      ENV: ${ENV:-dev}
+      API_URL: http://api:8001
+      REDIS_HOST: redis
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      # Behind nginx with TLS the cookie is Secure. Over plain http (local development) it
+      # could never come back, compose.dev.yml turns this off.
+      COOKIE_SECURE: "true"
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 128M}
+    logging: *logging
+
   # OpenAI-compatible provider simulator for tests, demos and load measurements.
   mock_llm:
     build:

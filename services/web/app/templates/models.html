@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% from "macros.html" import empty, field, csrf_field %}
+{% block content %}
+<h1 class="mb-4 text-xl font-semibold">Models and providers</h1>
+
+<section class="card overflow-x-auto">
+  <div class="mb-3 flex items-center justify-between">
+    <h2 class="card-title !mb-0">Providers</h2>
+  </div>
+  {% if providers %}
+  <table class="table">
+    <thead><tr><th>Name</th><th>Address</th><th>Key</th><th>Last check</th><th>Calibration limits</th><th></th></tr></thead>
+    <tbody>
+    {% for p in providers %}
+      <tr>
+        <td class="font-medium">{{ p.name }}
+          {% if p.is_local %}<span class="badge badge-gray">local</span>{% endif %}
+          {% if not p.enabled %}<span class="badge badge-amber">disabled</span>{% endif %}</td>
+        <td class="break-all font-mono text-xs">{{ p.base_url }}</td>
+        <td class="font-mono text-xs">{{ p.api_key_mask or "–" }}</td>
+        <td id="check-{{ p.id }}">
+          {% if p.last_check_at %}
+            {% if p.last_check_ok %}<span class="badge badge-green">ok</span> {{ p.last_check_latency_ms }} ms{% else %}<span class="badge badge-red">failed</span> <span class="text-xs text-slate-500">{{ p.last_check_error }}</span>{% endif %}
+            <div class="text-xs text-slate-400">{{ p.last_check_at|dt }}</div>
+          {% else %}<span class="text-slate-400">not checked</span>{% endif %}
+        </td>
+        <td class="text-xs text-slate-600">{{ p.calibration_max_concurrency or "default" }} parallel, {{ p.calibration_max_rps or "default" }} req/s</td>
+        <td class="whitespace-nowrap text-right">
+          {% if can_write %}
+          <form class="inline" method="post" action="/models/providers/{{ p.id }}/test" hx-post="/models/providers/{{ p.id }}/test" hx-target="#check-{{ p.id }}" hx-boost="false">
+            {{ csrf_field() }}<button class="btn btn-sm" type="submit">Test</button></form>
+          <form class="inline" method="post" action="/models/providers/{{ p.id }}/toggle">
+            {{ csrf_field() }}<input type="hidden" name="enabled" value="{{ 'false' if p.enabled else 'true' }}">
+            <button class="btn btn-sm" type="submit">{{ "Disable" if p.enabled else "Enable" }}</button></form>
+          <form class="inline" method="post" action="/models/providers/{{ p.id }}/delete" x-data @submit="if (!confirm('Delete this provider?')) $event.preventDefault()">
+            {{ csrf_field() }}<button class="btn btn-sm" type="submit">Delete</button></form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  {% call empty("No providers yet", "A provider is the address of an OpenAI-compatible API: a hosted service or your own Ollama, vLLM or llama.cpp server.") %}{% endcall %}
+  {% endif %}
+
+  {% if can_write %}
+  <details class="mt-4" {% if not providers %}open{% endif %}>
+    <summary class="cursor-pointer text-sm font-medium text-brand-700">Add a provider</summary>
+    <form method="post" action="/models/providers" class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {{ csrf_field() }}
+      {{ field("name", "Name", required=True) }}
+      {{ field("base_url", "Base URL", required=True, hint="For example https://api.openai.com/v1 or http://ollama:11434/v1") }}
+      {{ field("auth_type", "Authentication", "bearer", "select", options=[("bearer", "Bearer key"), ("none", "None")]) }}
+      {{ field("api_key", "API key", kind="password", hint="Stored encrypted; never shown again.", attrs='autocomplete="off"') }}
+      {{ field("max_concurrency", "Parallel calls in calibration", kind="number", hint="Empty = default") }}
+      {{ field("max_rps", "Requests per second in calibration", kind="number", attrs='step="0.1"', hint="Empty = default") }}
+      <div class="flex items-end">{{ field("is_local", "Local server (private network allowed)", kind="checkbox") }}</div>
+      <div class="flex items-end"><button class="btn btn-primary" type="submit">Add provider</button></div>
+    </form>
+  </details>
+  {% endif %}
+</section>
+
+<section class="card mt-6 overflow-x-auto">
+  <h2 class="card-title">Models</h2>
+  {% if models %}
+  <table class="table">
+    <thead><tr><th>Model</th><th>Provider</th><th class="num">Tier</th><th class="num">Context</th><th>Abilities</th><th>Price</th><th></th></tr></thead>
+    {% for m in models %}
+    <tbody x-data="{ edit: false }">
+      <tr>
+        <td class="font-medium">{{ m.name }} {% if not m.enabled %}<span class="badge badge-amber">disabled</span>{% endif %}</td>
+        <td>{{ m.provider_name }}</td>
+        <td class="num">{{ m.tier }}</td>
+        <td class="num">{{ m.context_window|num }}</td>
+        <td class="space-x-1">
+          {% if m.supports_tools %}<span class="badge badge-gray">tools</span>{% endif %}
+          {% if m.supports_json %}<span class="badge badge-gray">json</span>{% endif %}
+          {% if m.supports_stream %}<span class="badge badge-gray">stream</span>{% endif %}
+        </td>
+        <td>
+          {% if m.price is none %}<span class="text-amber-700">no price</span>
+          {% elif m.cost_type == "fixed_monthly" %}{{ m.price.monthly_cost_usd|money }} / month
+          {% else %}{{ m.price.input_per_1m|money }} in / {{ m.price.output_per_1m|money }} out <span class="text-xs text-slate-400">per 1M</span>{% endif %}
+        </td>
+        <td class="whitespace-nowrap text-right">
+          {% if can_write %}
+          <button type="button" class="btn btn-sm" @click="edit = !edit">Price</button>
+          <form class="inline" method="post" action="/models/models/{{ m.id }}/toggle">
+            {{ csrf_field() }}<input type="hidden" name="enabled" value="{{ 'false' if m.enabled else 'true' }}">
+            <button class="btn btn-sm" type="submit">{{ "Disable" if m.enabled else "Enable" }}</button></form>
+          {% endif %}
+        </td>
+      </tr>
+      {% if can_write %}
+      <tr x-show="edit" x-cloak>
+        <td colspan="7" class="bg-slate-50">
+          <form method="post" action="/models/models/{{ m.id }}/price" class="flex flex-wrap items-end gap-3">
+            {{ csrf_field() }}<input type="hidden" name="cost_type" value="{{ m.cost_type }}">
+            {% if m.cost_type == "fixed_monthly" %}
+            {{ field("monthly_cost_usd", "Monthly cost, USD", kind="number", attrs='step="0.01" min="0" required') }}
+            {% else %}
+            {{ field("input_per_1m", "Input, USD per 1M tokens", kind="number", attrs='step="0.000001" min="0"') }}
+            {{ field("output_per_1m", "Output, USD per 1M tokens", kind="number", attrs='step="0.000001" min="0"') }}
+            {% endif %}
+            <button class="btn btn-primary" type="submit">Save price</button>
+          </form>
+        </td>
+      </tr>
+      {% endif %}
+    </tbody>
+    {% endfor %}
+  </table>
+  <p class="hint">A new price applies from now on. Requests already made keep the price of their time.</p>
+  {% else %}
+  {% call empty("No models yet", "Register the models you want to compare: the reference (strongest) one and cheaper candidates.") %}{% endcall %}
+  {% endif %}
+
+  {% if can_write and providers %}
+  <details class="mt-4" {% if not models %}open{% endif %}>
+    <summary class="cursor-pointer text-sm font-medium text-brand-700">Add a model</summary>
+    <form method="post" action="/models/models" class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3" x-data="{ cost: 'per_token' }">
+      {{ csrf_field() }}
+      {{ field("provider_id", "Provider", "", "select", required=True, options=provider_options) }}
+      {{ field("name", "Model name", required=True, hint="Exactly as the provider calls it, e.g. gpt-4o-mini or llama3.2:3b") }}
+      {{ field("tier", "Tier (1 = small, 5 = strongest)", "1", "number", attrs='min="1" max="5"') }}
+      {{ field("context_window", "Context window, tokens", "8192", "number", required=True, attrs='min="1"') }}
+      {{ field("max_output_tokens", "Max output tokens", kind="number", attrs='min="1"', hint="Empty = not limited") }}
+      <div>
+        <label class="label" for="f-cost_type">Pricing</label>
+        <select id="f-cost_type" name="cost_type" class="input" x-model="cost">
+          <option value="per_token">Per token (hosted API)</option>
+          <option value="fixed_monthly">Fixed monthly (own server)</option>
+        </select>
+      </div>
+      <template x-if="cost === 'per_token'"><div class="contents">
+        {{ field("input_per_1m", "Input, USD per 1M tokens", kind="number", attrs='step="0.000001" min="0"') }}
+        {{ field("output_per_1m", "Output, USD per 1M tokens", kind="number", attrs='step="0.000001" min="0"') }}
+      </div></template>
+      <template x-if="cost === 'fixed_monthly'"><div class="contents">
+        {{ field("monthly_cost_usd", "Monthly cost, USD", kind="number", attrs='step="0.01" min="0"') }}
+        {{ field("idle_threshold_pct", "Idle below, % busy", kind="number", attrs='step="1" min="0" max="100"', hint="Empty = default") }}
+      </div></template>
+      <div class="flex flex-wrap items-end gap-4 pb-2 sm:col-span-2 lg:col-span-3">
+        {{ field("supports_tools", "Tool calls", kind="checkbox") }}
+        {{ field("supports_json", "JSON mode", kind="checkbox") }}
+        {{ field("supports_stream", "Streaming", "1", kind="checkbox") }}
+      </div>
+      <div><button class="btn btn-primary" type="submit">Add model</button></div>
+    </form>
+  </details>
+  {% endif %}
+</section>
+{% endblock %}
