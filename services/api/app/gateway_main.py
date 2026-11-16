@@ -23,6 +23,7 @@ from app.modules.gateway.proxy import GatewayProxy
 from app.modules.gateway.ratelimit import RateLimiter
 from app.modules.gateway.record import CompositeRecorder, LogRecorder, Recorder
 from app.modules.gateway.router import router
+from app.modules.gateway.rules_listener import RulesListener
 
 log = get_logger(__name__)
 
@@ -68,6 +69,8 @@ def create_app(
             refresh_seconds=settings.snapshot_refresh_seconds,
         )
         events = TrafficEventPublisher(settings)
+        rules_listener = RulesListener(settings, store.refresh)
+        app.state.rules_listener = rules_listener
         app.state.events = events
         app.state.settings = settings
         app.state.engine = engine  # exposed so tests can count database statements
@@ -82,6 +85,7 @@ def create_app(
         await store.refresh()  # so that the first request already finds a snapshot
         refresher = asyncio.create_task(store.run(), name="snapshot-refresh")
         sender = asyncio.create_task(events.run(), name="traffic-events")
+        listener = asyncio.create_task(rules_listener.run(), name="rules-listener")
         log.info("gateway_started", snapshot=store.current is not None)
         try:
             yield
@@ -90,6 +94,9 @@ def create_app(
             await events.stop()  # try to flush buffered events before the connections close
             with contextlib.suppress(asyncio.CancelledError):
                 await asyncio.wait_for(sender, 5)
+            rules_listener.stop()
+            with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+                await asyncio.wait_for(listener, 5)
             store.stop()
             refresher.cancel()
             with contextlib.suppress(asyncio.CancelledError):

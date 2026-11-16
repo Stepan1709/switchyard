@@ -160,6 +160,28 @@ async def test_failure_injection(client, code, status):
         assert r.headers["retry-after"] == "1"
 
 
+async def test_a_failure_can_be_limited_to_some_models(client):
+    headers = {"x-mock-fail": "503", "x-mock-fail-models": "mock-mid, mock-tiny"}
+    failing = await client.post(
+        "/v1/chat/completions", json=body(model="mock-mid"), headers=headers
+    )
+    assert failing.status_code == 503
+    spared = await client.post(
+        "/v1/chat/completions", json=body(model="mock-strong"), headers=headers
+    )
+    assert spared.status_code == 200
+
+
+async def test_stats_count_the_calls_that_reached_each_model(client):
+    before = (await client.get("/_stats")).json()["models"]
+    await client.post("/v1/chat/completions", json=body(model="mock-mid"))
+    await client.post("/v1/chat/completions", json=body(model="mock-mid"))
+    await client.post("/v1/chat/completions", json=body(model="mock-tiny"))
+    after = (await client.get("/_stats")).json()["models"]
+    assert after.get("mock-mid", 0) - before.get("mock-mid", 0) == 2
+    assert after.get("mock-tiny", 0) - before.get("mock-tiny", 0) == 1
+
+
 async def test_timeout_injection_hangs_until_the_client_gives_up():
     async with make_client(timeout_seconds=30) as c:
         call = c.post("/v1/chat/completions", json=body(), headers={"x-mock-fail": "timeout"})

@@ -46,6 +46,7 @@ def settings(app_settings, queue_name):
             "replay_queue": f"{queue_name}_replay",
             "run_finished_queue": f"{queue_name}_done",
             "judge_queue": f"{queue_name}_judge",
+            "shadow_queue": f"{queue_name}_shadow",
             "retry_delays_ms": [100, 200],
             "calibration_limit_wait": 1.0,
             "calibration_default_rps": 1000.0,

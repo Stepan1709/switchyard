@@ -169,7 +169,7 @@ gateway ── request.completed ──► RabbitMQ ──► worker (batches, O
 - **Retention**: whole monthly partitions are dropped (`TRAFFIC_RETENTION_MONTHS`, default 3: the current month and the
   3 before it). New partitions are created ahead of time by the worker.
 - **Task types**: `x-task-type` (or the key's default) is registered automatically on first sight, up to 50 per project;
-  `GET/POST/PATCH /projects/{id}/task-types`. Only the `record` mode works so far.
+  `GET/POST/PATCH /projects/{id}/task-types`. The modes `record`, `shadow` and `route` are described in the Routing section.
 - **Reading it**: `GET /projects/{id}/requests` (filters `task_type`, `model`, `status`, `since`, `until`; keyset
   pagination with `cursor`) and `GET /projects/{id}/requests/{request_id}` (with the stored bodies).
 
@@ -267,6 +267,53 @@ The judge was asked 32 times for 120 answers: the 88 answers equal to the refere
 Limits worth knowing: if the reference is wrong, the candidates are measured against its mistakes (labelled examples and user
 feedback are the counterweight); a different but equally valid sequence of tool calls is not credited automatically; and the
 effect of an action is never checked, only the decision.
+
+## Routing
+
+A task type of a project is in one of three modes (`PATCH /projects/{id}/task-types/{name}`):
+
+| mode | who answers | what else happens |
+|---|---|---|
+| `record` | the reference model | the request is logged |
+| `shadow` | the reference model | a share (`shadow_rate`) of the requests is copied to `shadow_model_ids` in the background; their answers are stored in `shadow_results`, never shown to the client |
+| `route` | the models of the **active rule**, in order | if the first fails before sending anything, the next one is tried |
+
+**Rules.** A rule version is a chain of models (`routing_rules`). It is `proposed` by a recommendation or by hand, and only
+a person activates it. The versions of one task type are numbered; exactly one can be active (a partial unique index in the
+database, so two simultaneous activations cannot both win), and `POST .../activate` takes `expected_active_version`, the
+version the person saw as active: if somebody changed it meanwhile the answer is 409 and nothing changes. Rolling back
+(`POST .../rules/rollback`) is one step: the version the active one replaced comes back; with nothing to come back to, the task
+type returns to `record`. Every change is audited and announced with `rules.changed`, and activation and rollback accept an
+`Idempotency-Key`.
+
+**Recommendation** (`GET /projects/{id}/calibration-runs/{run}/recommendation`, after the evaluation of the run is done). A model is
+eligible when it has enough evaluated answers, its pass rate reaches `min_pass_rate` (default 0.9), the optional quality and p95
+latency limits hold, its error rate is within `max_error_rate` (default 0.05), and its context was large enough for every
+sampled request. The eligible models are ordered by cost per request (a server paid by the month counts as free, and the
+recommendation says so), then by latency; the reference model is appended as the last resort. For each candidate the reasons
+it was accepted or not are returned. `POST .../recommendation/propose` writes the result down as a proposed rule.
+
+**Which model a request gets.** A `model` that is registered and is not the project's reference *pins* that model: it answers
+alone, with no rules and no fallbacks. Everything else (the reference's own name, `auto`, no name, a name the registry does not
+know) lets the gateway decide, so an application that keeps its old model name and only changes `base_url` is still routed.
+Replies carry `x-switchyard-model` (who answered) and `x-switchyard-mode` (`record`, `shadow`, `route`, `pinned`).
+
+**Fallbacks.** The next model of the chain is tried when the provider cannot be reached, times out, answers 429 or 5xx, or (for
+a request that is not streamed) answers something that does not fit the JSON schema of the task type's required `json_schema`
+check. After the first byte of a stream there is no switching: the client already holds part of the answer. The last model is
+never second-guessed.
+
+**Hot swap.** Each gateway keeps the rules in its in-memory snapshot and swaps it atomically when `rules.changed` arrives (and
+by polling, as a safety net). The last good snapshot is copied to Redis, so a gateway that starts while PostgreSQL is down, or
+keeps running while PostgreSQL and RabbitMQ are down, routes by it.
+
+**Conversations.** An agent calls the model many times for one task. `x-session-id` (or, without it, a key derived from the start of
+the conversation) and the step number are stored with each request. A calibration run with `sample_unit: "session"` replays
+whole recorded conversations (only complete ones: every step recorded, with its body, answered by the reference), and its
+aggregates add the share of conversations in which every step passed, with a Wilson interval. Every step is replayed on the
+*recorded* history, so this is an upper bound of how often a model would finish the task by itself, where one early deviation
+changes everything after it. The check `tool_args_valid` (and the always-recorded `valid_args`) tells whether the tool calls of an
+answer fit the tools the request offered: a known tool, arguments that match its parameter schema. It needs no reference answer.
 
 ## Repository layout
 

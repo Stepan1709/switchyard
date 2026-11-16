@@ -24,7 +24,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base, UUIDPrimaryKeyMixin
 
-CHECK_KINDS = ("json_schema", "exact_match", "regex", "tool_call_match", "llm_judge")
+CHECK_KINDS = (
+    "json_schema",
+    "exact_match",
+    "regex",
+    "tool_call_match",
+    "tool_args_valid",
+    "llm_judge",
+)
 JUDGE_MODES = ("grade", "pairwise")
 
 
@@ -34,7 +41,8 @@ class TaskCheck(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "task_checks"
     __table_args__ = (
         CheckConstraint(
-            "kind in ('json_schema', 'exact_match', 'regex', 'tool_call_match', 'llm_judge')",
+            "kind in ('json_schema', 'exact_match', 'regex', 'tool_call_match',"
+            " 'tool_args_valid', 'llm_judge')",
             name="kind",
         ),
         Index("ix_task_checks_project_task", "project_id", "task_type", "position"),
@@ -104,6 +112,9 @@ class Evaluation(UUIDPrimaryKeyMixin, Base):
     equal_to_truth: Mapped[bool] = mapped_column(Boolean, default=False)
     checks: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
     valid_schema: Mapped[bool | None] = mapped_column(Boolean)  # null: no json_schema check
+    # Are the arguments of the answer's tool calls valid for the tools offered in the request
+    # (known tool, arguments match its schema)? null: the answer made no tool call.
+    valid_args: Mapped[bool | None] = mapped_column(Boolean)
     judge_mode: Mapped[str | None] = mapped_column(String(16))
     judge_model_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     judge_score: Mapped[int | None] = mapped_column(SmallInteger)
@@ -167,6 +178,13 @@ class RunAggregate(Base):
     pass_rate_low: Mapped[float | None] = mapped_column(Float)  # Wilson interval
     pass_rate_high: Mapped[float | None] = mapped_column(Float)
     valid_rate: Mapped[float | None] = mapped_column(Float)  # share of schema-valid answers
+    valid_args_rate: Mapped[float | None] = mapped_column(Float)  # tool calls with valid arguments
+    # Whole conversations (sample_unit = session): the share in which EVERY step passed.
+    n_sessions: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    n_sessions_passed: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    session_pass_rate: Mapped[float | None] = mapped_column(Float)
+    session_pass_low: Mapped[float | None] = mapped_column(Float)
+    session_pass_high: Mapped[float | None] = mapped_column(Float)
     prompt_tokens_avg: Mapped[float | None] = mapped_column(Float)
     completion_tokens_avg: Mapped[float | None] = mapped_column(Float)
     latency_p50_ms: Mapped[float | None] = mapped_column(Float)

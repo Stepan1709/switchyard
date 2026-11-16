@@ -11,11 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import AppError, Conflict, NotFound, Unprocessable
+from app.core.events import RULES_CHANGED
+from app.core.outbox import enqueue
 from app.modules.audit import service as audit
 from app.modules.auth.models import Admin
+from app.modules.calibration.repository import CalibrationRepository
 from app.modules.projects.repository import ProjectRepository
+from app.modules.routing.models import RoutingRule
 from app.modules.traffic.models import TaskType, TrafficRequest
-from app.modules.traffic.schemas import RequestPage, RequestSummary
+from app.modules.traffic.schemas import RequestPage, RequestSummary, TaskTypeUpdate
 
 # Columns of the list view: the bodies (the heavy jsonb columns) are not even read from disk.
 _SUMMARY_COLUMNS = [
@@ -162,24 +166,66 @@ class TrafficService:
         return task_type
 
     async def update_task_type(
-        self, admin: Admin, project_id: uuid.UUID, name: str, mode: str, ip: str | None
+        self, admin: Admin, project_id: uuid.UUID, name: str, data: TaskTypeUpdate, ip: str | None
     ) -> TaskType:
+        """Switch the mode of a task type: record -> shadow -> route (and back).
+
+        record  everything goes to the reference model and is logged
+        shadow  the same, and a share of the requests is also sent to the listed models
+        route   the active rule decides; it needs one (a person activates it first)
+        """
         await self._check_project(admin, project_id)
-        if mode != "record":
-            # shadow and route need the calibration and routing stages: refusing now is honest
-            raise Unprocessable(f"Mode '{mode}' is not available yet; only 'record' works")
-        stmt = select(TaskType).where(TaskType.project_id == project_id, TaskType.name == name)
+        # FOR UPDATE: the same lock the rule activation takes, so a mode change and an
+        # activation of the same task type never interleave.
+        stmt = (
+            select(TaskType)
+            .where(TaskType.project_id == project_id, TaskType.name == name)
+            .with_for_update()
+        )
         task_type = (await self.session.execute(stmt)).scalars().first()
         if task_type is None:
             raise NotFound("Task type not found")
-        task_type.mode = mode
+
+        shadow_ids: list[uuid.UUID] = []
+        rate = 0.0
+        if data.mode == "route":
+            active = await self.session.execute(
+                select(RoutingRule.id).where(
+                    RoutingRule.project_id == project_id,
+                    RoutingRule.task_type == name,
+                    RoutingRule.status == "active",
+                )
+            )
+            if active.first() is None:
+                raise Unprocessable("Route mode needs an active rule: activate one first")
+        elif data.mode == "shadow":
+            shadow_ids = list(dict.fromkeys(data.shadow_model_ids))
+            if not shadow_ids or data.shadow_rate <= 0:
+                raise Unprocessable("Shadow mode needs shadow_model_ids and a shadow_rate above 0")
+            found = await CalibrationRepository(self.session).candidates(shadow_ids)
+            problems = [
+                str(i)
+                for i in shadow_ids
+                if i not in found or not (found[i].enabled and found[i].provider_enabled)
+            ]
+            if problems:
+                raise Unprocessable(f"Unknown or disabled models: {', '.join(problems)}")
+            rate = data.shadow_rate
+        task_type.mode = data.mode
+        task_type.shadow_model_ids = shadow_ids
+        task_type.shadow_rate = rate
+        enqueue(
+            self.session,
+            RULES_CHANGED,
+            {"project_id": str(project_id), "task_type": name, "reason": f"mode:{data.mode}"},
+        )
         audit.record(
             self.session,
             action="task_type.update",
             actor_id=admin.id,
             target_type="project",
             target_id=project_id,
-            details={"name": name, "mode": mode},
+            details={"name": name, "mode": data.mode, "shadow_rate": rate},
             ip=ip,
         )
         await self.session.commit()

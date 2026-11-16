@@ -25,6 +25,7 @@ class PoolItem:
     dedup_key: str  # equal keys = the same prompt
     prompt_chars: int  # size of the request (a stand-in for the token count)
     has_tools: bool
+    session_id: str | None = None  # set when the unit is a whole conversation
 
 
 def deduplicate(items: Sequence[PoolItem]) -> list[PoolItem]:

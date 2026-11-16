@@ -29,11 +29,13 @@ from app.core import ssrf
 from app.core.config import Settings
 from app.core.logging import correlation_id_var, get_logger
 from app.core.snapshot import KeyInfo, LiveSnapshot, RouteTarget, SnapshotStore
-from app.modules.gateway import errors
-from app.modules.gateway.body import PreparedBody, prepare_body
+from app.modules.evaluation.checks import schema_errors
+from app.modules.gateway import errors, routing
+from app.modules.gateway.body import PreparedBody, build_prepared, parse_body
 from app.modules.gateway.errors import GatewayError
 from app.modules.gateway.ratelimit import RateLimiter, RateResult
 from app.modules.gateway.record import Recorder, RequestRecord
+from app.modules.gateway.session import session_of
 from app.modules.gateway.sse import SseFilter, StreamAssembler
 from app.modules.projects import keys as client_keys
 
@@ -45,7 +47,18 @@ _DUMMY_HASH = "0" * 64  # compared for unknown key prefixes so that timing does 
 # Anything else (401/403 = the gateway's provider key is wrong, 404 = wrong model name, 5xx)
 # is the operator's problem, not the client's, and becomes a 502.
 _PASSTHROUGH = {400, 413, 422, 429}
-MODE = "record"
+# Failures that are visible before a single byte of the answer has gone to the client: the
+# next model of the chain may still be tried.
+_RETRYABLE_CODES = {"provider_overloaded", "upstream_timeout", "upstream_unreachable"}
+_RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+
+
+class _TryNext(Exception):
+    """This model failed before anything was sent to the client; try the next one."""
+
+    def __init__(self, error: GatewayError | None) -> None:
+        super().__init__("try the next model")
+        self.error = error
 
 
 def _ms(since: float) -> float:
@@ -170,9 +183,9 @@ class GatewayProxy:
     async def chat(self, request: Request) -> Response:
         started = time.perf_counter()
         request_id = str(uuid.uuid4())
-        rec = RequestRecord(request_id=request_id, started_at=datetime.now(UTC), mode=MODE)
+        rec = RequestRecord(request_id=request_id, started_at=datetime.now(UTC))
         token = correlation_id_var.set(request_id)
-        base_headers = {"x-request-id": request_id, "x-switchyard-mode": MODE}
+        base_headers = {"x-request-id": request_id}
         try:
             try:
                 live = self._snapshot()
@@ -189,16 +202,23 @@ class GatewayProxy:
                 rec.task_type = task_type
 
                 project = live.snapshot.projects[key.project_id]
-                target = project.reference
-                if target is None:
+                parsed = parse_body(raw)
+                requested = parsed.get("model")
+                requested = requested if isinstance(requested, str) else None
+                plan = routing.plan_for(live.snapshot, project, task_type, requested)
+                if plan is None:
                     raise errors.no_reference_model()
-                rec.model, rec.provider = target.model_name, target.provider_name
-                rec.model_id, rec.provider_id = target.model_id, target.provider_id
+                target = plan.chain[0]
+                rec.mode = plan.mode
                 rec.mask_pii = project.mask_pii
-                base_headers["x-switchyard-model"] = target.model_name
+                base_headers["x-switchyard-mode"] = plan.mode
+                self._point_at(rec, base_headers, target)
 
-                prepared = prepare_body(raw, target.model_name)
+                prepared = build_prepared(parsed, target.model_name)
                 rec.stream, rec.requested_model = prepared.stream, prepared.requested_model
+                rec.session_id, rec.step = session_of(
+                    request.headers.get("x-session-id"), prepared.original.get("messages")
+                )
                 capture = project.store_bodies
                 if capture:
                     # A body bigger than the limit is not kept at all: a cut-off prompt or
@@ -208,8 +228,11 @@ class GatewayProxy:
                         rec.payload_bytes = len(raw)
                     else:
                         rec.payload_skipped = True
-                return await self._forward(
-                    request, live, target, prepared, rec, base_headers, started, capture
+                if capture and not rec.payload_skipped:
+                    # Shadow mode: copies for the candidates are queued with the stored request.
+                    rec.shadow_model_ids = [t.model_id for t in routing.shadow_targets(plan)]
+                return await self._run_chain(
+                    request, live, plan, parsed, prepared, rec, base_headers, started, capture
                 )
             except GatewayError as exc:
                 rec.status = (
@@ -223,7 +246,50 @@ class GatewayProxy:
         finally:
             correlation_id_var.reset(token)
 
+    @staticmethod
+    def _point_at(rec: RequestRecord, headers: dict[str, str], target: RouteTarget) -> None:
+        """Say which model this request is going to (updated if a fallback takes over)."""
+        rec.model, rec.provider = target.model_name, target.provider_name
+        rec.model_id, rec.provider_id = target.model_id, target.provider_id
+        headers["x-switchyard-model"] = target.model_name
+
     # ---- the provider call ----
+    async def _run_chain(
+        self,
+        request: Request,
+        live: LiveSnapshot,
+        plan: routing.Plan,
+        parsed: dict[str, Any],
+        prepared: PreparedBody,
+        rec: RequestRecord,
+        base_headers: dict[str, str],
+        started: float,
+        capture: bool,
+    ) -> Response:
+        """Try the models of the plan in order. Moving on is only allowed while nothing has
+        been sent to the client: after the first byte of a stream there is no way back."""
+        last_error: GatewayError | None = None
+        for index, target in enumerate(plan.chain):
+            last = index == len(plan.chain) - 1
+            if index:
+                self._point_at(rec, base_headers, target)
+                prepared = build_prepared(parsed, target.model_name)
+            try:
+                return await self._forward(
+                    request, live, target, prepared, rec, base_headers, started, capture,
+                    plan.validation_schema if not prepared.stream else None, can_fall_back=not last,
+                )  # fmt: skip
+            except _TryNext as nxt:
+                rec.fallbacks += 1
+                last_error = nxt.error or last_error
+                log.info(
+                    "fallback_to_next_model",
+                    failed_model=target.model_name,
+                    reason=nxt.error.code if nxt.error else "upstream_status_or_invalid_answer",
+                )
+        # unreachable: the last model never raises _TryNext (can_fall_back is False for it)
+        raise last_error or errors.upstream_unreachable()
+
     async def _forward(
         self,
         request: Request,
@@ -234,12 +300,18 @@ class GatewayProxy:
         base_headers: dict[str, str],
         started: float,
         capture: bool,
+        validation_schema: dict[str, Any] | None,
+        *,
+        can_fall_back: bool,
     ) -> Response:
         sem = self._semaphore(target.provider_id)
         try:
             await asyncio.wait_for(sem.acquire(), self.settings.gateway_provider_queue_timeout)
         except TimeoutError as exc:
-            raise errors.overloaded(target.provider_name) from exc
+            error = errors.overloaded(target.provider_name)
+            if can_fall_back:
+                raise _TryNext(error) from exc
+            raise error from exc
 
         released = False
 
@@ -251,9 +323,19 @@ class GatewayProxy:
 
         try:
             upstream = await self._send(request, live, target, prepared, rec, started)
+        except GatewayError as exc:
+            release()
+            if can_fall_back and exc.code in _RETRYABLE_CODES:
+                raise _TryNext(exc) from exc
+            raise
         except BaseException:
             release()  # also on cancellation: a leaked slot would shrink the provider's capacity
             raise
+
+        if can_fall_back and upstream.status_code in _RETRYABLE_STATUSES:
+            await upstream.aclose()  # the provider failed before sending an answer: next model
+            release()
+            raise _TryNext(None)
 
         rec.http_status = upstream.status_code
         content_type = upstream.headers.get("content-type", "")
@@ -269,12 +351,21 @@ class GatewayProxy:
         # Non-streaming answer, or an error answer: read it whole (bounded), then close.
         try:
             body = await self._read_limited(upstream)
-        except GatewayError:
+        except GatewayError as exc:
             release()
+            if can_fall_back and exc.code in _RETRYABLE_CODES:
+                raise _TryNext(exc) from exc
             raise
         finally:
             await upstream.aclose()
         release()
+        if (
+            can_fall_back
+            and validation_schema is not None
+            and upstream.status_code == 200
+            and not _answer_fits(body, validation_schema)
+        ):
+            raise _TryNext(None)  # not valid for this task type: the next model may do better
         return self._plain_response(
             upstream, body, content_type, rec, base_headers, started, capture
         )
@@ -319,7 +410,8 @@ class GatewayProxy:
             extensions=req.extensions,
             timeout=self._timeout,
         )
-        rec.overhead_ms = _ms(started)  # everything the gateway did before the provider call
+        if rec.overhead_ms is None:  # the first attempt only: later ones include earlier waits
+            rec.overhead_ms = _ms(started)  # the gateway's work before the provider call
         # A stream's headers arrive almost at once, so the wait is short; a normal answer comes
         # only when the model has finished, so it may take as long as the total limit.
         wait = (
@@ -474,6 +566,19 @@ class GatewayProxy:
         )
 
 
+def _answer_fits(body: bytes, schema: dict[str, Any]) -> bool:
+    """Does the content of a non-streamed answer parse as JSON that fits the task type's schema?"""
+    data = _json_object(body)
+    if data is None:
+        return False
+    try:
+        content = data["choices"][0]["message"]["content"]
+        value = json.loads(content) if isinstance(content, str) else None
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+    return not schema_errors(value, schema)
+
+
 def _error_event(message: str, code: str) -> bytes:
     body = {"error": {"message": message, "type": "api_error", "param": None, "code": code}}
     return f"data: {json.dumps(body)}\n\n".encode()
@@ -498,5 +603,4 @@ def models_response(live: LiveSnapshot) -> JSONResponse:
                 for n in names
             ],
         },
-        headers={"x-switchyard-mode": MODE},
     )

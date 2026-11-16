@@ -142,6 +142,85 @@ class CalibrationRepository:
             for r in rows
         ]
 
+    async def session_pool(
+        self,
+        project_id: uuid.UUID,
+        task_type: str,
+        reference_model_id: uuid.UUID,
+        *,
+        since: datetime | None,
+        until: datetime | None,
+        max_steps: int,
+        limit: int,
+    ) -> list[PoolItem]:
+        """Conversations that can be replayed whole: every step recorded, answered by the
+        reference, with bodies, steps 0..n-1 each exactly once. A derived session id shared by
+        two unrelated conversations breaks that (two rows for one step) and is left out."""
+        sql = text(
+            """
+            SELECT session_id, count(*) AS steps, max(length(request_payload::text)) AS chars,
+                   bool_or(coalesce(jsonb_typeof(request_payload->'tools') = 'array'
+                                    AND jsonb_array_length(request_payload->'tools') > 0,
+                                    false)) AS has_tools,
+                   (array_agg(md5(coalesce((request_payload->'messages')::text, ''))
+                              ORDER BY step))[1] AS dedup_key
+            FROM requests
+            WHERE project_id = :project_id AND task_type = :task_type
+              AND model_id = :reference AND status = 'ok' AND session_id IS NOT NULL
+              AND request_payload IS NOT NULL AND response_payload IS NOT NULL
+              AND NOT payload_skipped
+              AND (CAST(:since AS timestamptz) IS NULL OR started_at >= :since)
+              AND (CAST(:until AS timestamptz) IS NULL OR started_at < :until)
+            GROUP BY session_id
+            HAVING count(*) = count(DISTINCT step) AND max(step) = count(*) - 1
+               AND count(*) <= :max_steps
+            ORDER BY max(started_at) DESC
+            LIMIT :limit
+            """
+        )
+        rows = await self.session.execute(
+            sql,
+            {
+                "project_id": project_id,
+                "task_type": task_type,
+                "reference": reference_model_id,
+                "since": since,
+                "until": until,
+                "max_steps": max_steps,
+                "limit": limit,
+            },
+        )
+        return [
+            PoolItem(
+                uuid.uuid5(uuid.NAMESPACE_URL, f"session:{r.session_id}"),
+                "traffic",
+                r.dedup_key,
+                int(r.chars),
+                bool(r.has_tools),
+                session_id=r.session_id,
+            )
+            for r in rows
+        ]
+
+    async def session_rows(
+        self, project_id: uuid.UUID, session_ids: list[str], reference_model_id: uuid.UUID
+    ) -> list[Any]:
+        sql = text(
+            """
+            SELECT request_id, session_id, step, request_payload, response_payload,
+                   prompt_tokens, completion_tokens
+            FROM requests
+            WHERE project_id = :project_id AND session_id = ANY(:ids) AND model_id = :reference
+              AND status = 'ok' AND request_payload IS NOT NULL AND response_payload IS NOT NULL
+              AND NOT payload_skipped
+            ORDER BY session_id, step
+            """
+        )
+        result = await self.session.execute(
+            sql, {"project_id": project_id, "ids": session_ids, "reference": reference_model_id}
+        )
+        return list(result.all())
+
     async def labeled_pool(self, project_id: uuid.UUID, task_type: str) -> list[PoolItem]:
         sql = text(
             """

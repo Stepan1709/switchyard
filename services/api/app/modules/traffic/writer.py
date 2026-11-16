@@ -19,15 +19,16 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
-from app.core.events import RequestCompleted
+from app.core.events import SHADOW_EXECUTE, RequestCompleted
 from app.core.logging import get_logger
 from app.core.messaging import Message, PermanentError, TemporaryError
+from app.core.outbox import enqueue
 from app.modules.traffic import partitions
 from app.modules.traffic.models import TrafficRequest
 
 log = get_logger(__name__)
 
-_COLUMNS = list(RequestCompleted.model_fields)
+_COLUMNS = [c for c in RequestCompleted.model_fields if c != "shadow_model_ids"]
 _TASK_TYPE_SQL = text(
     """
     INSERT INTO task_types (id, project_id, name, mode, auto_registered)
@@ -134,6 +135,28 @@ class RequestLogWriter:
             if not future.done():
                 future.set_result(None)
 
+    @staticmethod
+    def _queue_shadow_copies(session: AsyncSession, events: list[RequestCompleted]) -> None:
+        """Shadow mode: one job per (request, candidate), written in the SAME transaction as the
+        request itself. A request that was stored always gets its copies queued, a request that
+        was a duplicate delivery (and so not stored again) never queues them twice."""
+        for e in events:
+            if not e.shadow_model_ids or e.payload_skipped or e.request_payload is None:
+                continue  # without the stored prompt there is nothing to copy
+            for model_id in e.shadow_model_ids:
+                enqueue(
+                    session,
+                    SHADOW_EXECUTE,
+                    {
+                        "request_id": str(e.request_id),
+                        "started_at": e.started_at.isoformat(),
+                        "project_id": str(e.project_id),
+                        "task_type": e.task_type,
+                        "model_id": str(model_id),
+                    },
+                    correlation_id=str(e.request_id),
+                )
+
     async def _write(self, events: list[RequestCompleted]) -> None:
         rows: list[dict[str, Any]] = [{c: getattr(e, c) for c in _COLUMNS} for e in events]
         months = {partitions.month_start(e.started_at) for e in events}
@@ -141,11 +164,17 @@ class RequestLogWriter:
         async with self._session_factory() as session, session.begin():
             if new_months:  # a partition for each month in the batch must exist before the insert
                 await partitions.ensure_partitions(session, sorted(new_months))
-            await session.execute(
-                pg_insert(TrafficRequest)
-                .values(rows)
-                .on_conflict_do_nothing(index_elements=["started_at", "request_id"])
+            inserted = set(
+                (
+                    await session.execute(
+                        pg_insert(TrafficRequest)
+                        .values(rows)
+                        .on_conflict_do_nothing(index_elements=["started_at", "request_id"])
+                        .returning(TrafficRequest.request_id)
+                    )
+                ).scalars()
             )
+            self._queue_shadow_copies(session, [e for e in events if e.request_id in inserted])
             await self._register_task_types(session, events)
         self._known_months |= new_months
 

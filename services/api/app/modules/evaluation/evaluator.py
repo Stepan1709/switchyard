@@ -183,10 +183,17 @@ class Evaluator:
         truth, basis = self._truth(data)
         configured = data.checks
         deterministic = [c for c in configured if c.kind != "llm_judge"]
+        tools = data.request.get("tools")
         outcomes = [
-            chk.run_check(c.kind, c.config, answer, truth, required=c.required)
+            chk.run_check(c.kind, c.config, answer, truth, required=c.required, tools=tools)
             for c in deterministic
         ]
+        # Whether the tool calls fit the tools of the request is always recorded (it needs no
+        # truth); it only counts towards the verdict when a tool_args_valid check is configured.
+        args_outcome = next((o for o in outcomes if o.kind == "tool_args_valid"), None)
+        if args_outcome is None:
+            args_outcome = chk.run_check("tool_args_valid", {}, answer, truth, tools=tools)
+        valid_args = args_outcome.passed
         ignore = self._ignored_args(deterministic)
         equal = truth is not None and chk.answers_equal(answer, truth, ignore_args=ignore)
 
@@ -210,7 +217,7 @@ class Evaluator:
             else:
                 outcome = await self._ask_judge(data, answer, truth, basis, judge_check, attempt)
 
-        await self._store(data, outcomes, outcome, equal, basis)
+        await self._store(data, outcomes, outcome, equal, basis, valid_args)
 
     @staticmethod
     def _truth(data: JobData) -> tuple[chk.Answer | None, str]:
@@ -384,6 +391,7 @@ class Evaluator:
         judge: _JudgeOutcome,
         equal: bool,
         basis: str,
+        valid_args: bool | None,
     ) -> None:
         schema_results = [o.passed for o in outcomes if o.kind == "json_schema" and o.applied]
         valid_schema = all(schema_results) if schema_results else None
@@ -404,6 +412,7 @@ class Evaluator:
             "equal_to_truth": equal,
             "checks": [o.as_json() for o in outcomes],
             "valid_schema": valid_schema,
+            "valid_args": valid_args,
             "judge_mode": judge.mode,
             "judge_model_id": data.judge_model_id if judge.mode else None,
             "judge_score": judge.score,

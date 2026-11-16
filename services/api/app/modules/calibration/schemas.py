@@ -9,7 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field
 class Thresholds(BaseModel):
     """What a candidate must reach to be recommended (used by the recommendation stage)."""
 
-    min_quality: float | None = Field(default=None, ge=0, le=5)
+    # all on the 0..1 scale of the evaluation
+    min_pass_rate: float | None = Field(default=None, ge=0, le=1)
+    min_quality: float | None = Field(default=None, ge=0, le=1)
     max_p95_ms: int | None = Field(default=None, gt=0)
     max_error_rate: float | None = Field(default=None, ge=0, le=1)
 
@@ -20,6 +22,10 @@ class RunCreate(BaseModel):
     sample_size: int = Field(gt=0)
     strategy: Literal["random", "stratified"] = "random"
     source: Literal["traffic", "labeled", "both"] = "traffic"
+    # request: single requests. session: whole agent conversations (every step), so that the
+    # run can say how many conversations a model would have got right at every step.
+    # `sample_size` then counts conversations. Only for recorded traffic.
+    sample_unit: Literal["request", "session"] = "request"
     # Fixed seed = the same pool gives the same sample. Chosen at random when omitted (and
     # stored, so the run can still be reproduced).
     seed: int | None = Field(default=None, ge=0, lt=2**31)
@@ -63,6 +69,7 @@ class RunOut(BaseModel):
     status_reason: str | None
     strategy: str
     source: str
+    sample_unit: str
     seed: int
     sample_size: int
     samples_taken: int

@@ -89,5 +89,5 @@ async def update_task_type(
     admin: AdminOnly,
     service: ServiceDep,
 ) -> TaskTypeOut:
-    updated = await service.update_task_type(admin, project_id, name, body.mode, client_ip(request))
+    updated = await service.update_task_type(admin, project_id, name, body, client_ip(request))
     return TaskTypeOut.model_validate(updated)

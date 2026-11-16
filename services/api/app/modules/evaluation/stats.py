@@ -58,6 +58,8 @@ class ResultRow:
     quality: float | None = None
     passed: bool | None = None
     valid_schema: bool | None = None
+    valid_args: bool | None = None
+    session_id: str | None = None  # the conversation this step belongs to
     basis: str | None = None
     judge_cost_usd: Decimal | None = None
 
@@ -76,6 +78,12 @@ class Aggregate:
     pass_rate_low: float | None
     pass_rate_high: float | None
     valid_rate: float | None
+    valid_args_rate: float | None
+    n_sessions: int
+    n_sessions_passed: int
+    session_pass_rate: float | None
+    session_pass_low: float | None
+    session_pass_high: float | None
     prompt_tokens_avg: float | None
     completion_tokens_avg: float | None
     latency_p50_ms: float | None
@@ -87,6 +95,34 @@ class Aggregate:
     judge_cost_usd: Decimal | None
     insufficient_data: bool
     basis_counts: dict[str, int] = field(default_factory=dict)
+
+
+def session_outcomes(rows: Sequence[ResultRow]) -> tuple[int, int]:
+    """(conversations judged, conversations in which every step passed).
+
+    Every step is replayed on the RECORDED history (the candidate never sees its own earlier
+    answers), so this is the share of conversations that a model would have got right at each
+    step: an upper bound of how often it would finish the task on its own, where one early
+    deviation changes everything after it.
+
+    * a step that failed, was refused or did not fit the context fails the conversation;
+    * a step with no verdict (judge_failed, not evaluated) makes the conversation unjudgeable:
+      it is left out instead of being counted as a failure or a success.
+    """
+    steps: dict[str, list[ResultRow]] = {}
+    for r in rows:
+        if r.session_id is not None:
+            steps.setdefault(r.session_id, []).append(r)
+    judged = passed = 0
+    for items in steps.values():
+        if any(r.status in ("error", "refused", "context_exceeded") for r in items):
+            judged += 1
+            continue
+        if any(r.eval_status != "ok" or r.passed is None for r in items):
+            continue
+        judged += 1
+        passed += all(r.passed for r in items)
+    return judged, passed
 
 
 def aggregate(rows: Sequence[ResultRow], min_samples: int) -> Aggregate:
@@ -107,6 +143,9 @@ def aggregate(rows: Sequence[ResultRow], min_samples: int) -> Aggregate:
     n_pass = sum(1 for r in passes if r.passed)
     interval = wilson_interval(n_pass, len(passes))
     schema = [r.valid_schema for r in ok if r.valid_schema is not None]
+    args = [r.valid_args for r in ok if r.valid_args is not None]
+    sessions, sessions_passed = session_outcomes(rows)
+    session_interval = wilson_interval(sessions_passed, sessions)
     attempts = len(rows) - n_context
     costs = [r.cost_usd for r in ok if r.cost_usd is not None]
     judge_costs = [r.judge_cost_usd for r in rows if r.judge_cost_usd is not None]
@@ -130,6 +169,12 @@ def aggregate(rows: Sequence[ResultRow], min_samples: int) -> Aggregate:
         pass_rate_low=interval[0] if interval else None,
         pass_rate_high=interval[1] if interval else None,
         valid_rate=sum(1 for v in schema if v) / len(schema) if schema else None,
+        valid_args_rate=sum(1 for v in args if v) / len(args) if args else None,
+        n_sessions=sessions,
+        n_sessions_passed=sessions_passed,
+        session_pass_rate=sessions_passed / sessions if sessions else None,
+        session_pass_low=session_interval[0] if session_interval else None,
+        session_pass_high=session_interval[1] if session_interval else None,
         prompt_tokens_avg=mean(
             numbers([float(r.prompt_tokens) if r.prompt_tokens is not None else None for r in ok])
         ),

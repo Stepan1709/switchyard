@@ -5,13 +5,16 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CheckKind = Literal["json_schema", "exact_match", "regex", "tool_call_match", "llm_judge"]
+CheckKind = Literal[
+    "json_schema", "exact_match", "regex", "tool_call_match", "tool_args_valid", "llm_judge"
+]
 
 
 class CheckCreate(BaseModel):
     kind: CheckKind
     # What the check needs: json_schema {"schema": {...}}; exact_match {"ignore_case"};
     # regex {"pattern", "mode"}; tool_call_match {"ignore_args", "names_only"};
+    # tool_args_valid {} (arguments fit the schema of the tool offered in the request);
     # llm_judge {"min_score", "rubric"}.
     config: dict[str, Any] = Field(default_factory=dict)
     required: bool = True
@@ -47,6 +50,12 @@ class AggregateOut(BaseModel):
     pass_rate_low: float | None
     pass_rate_high: float | None
     valid_rate: float | None
+    valid_args_rate: float | None
+    n_sessions: int
+    n_sessions_passed: int
+    session_pass_rate: float | None
+    session_pass_low: float | None
+    session_pass_high: float | None
     prompt_tokens_avg: float | None
     completion_tokens_avg: float | None
     latency_p50_ms: float | None
@@ -82,6 +91,7 @@ class EvaluationOut(BaseModel):
     equal_to_truth: bool
     checks: list[dict[str, Any]]
     valid_schema: bool | None
+    valid_args: bool | None
     judge_mode: str | None
     judge_score: int | None
     judge_verdict: str | None

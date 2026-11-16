@@ -45,6 +45,10 @@ class RequestRecord:
     payload_skipped: bool = False
     payload_bytes: int = 0  # size of the stored bodies, for the event buffer's memory limit
     mask_pii: bool = False
+    session_id: str | None = None
+    step: int | None = None
+    shadow_model_ids: list[str] = field(default_factory=list)
+    fallbacks: int = 0  # how many models were tried before the one that answered
     extra: dict[str, object] = field(default_factory=dict)
 
 

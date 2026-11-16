@@ -131,9 +131,10 @@ class EvaluationRepository:
             """
             SELECT r.model_id, r.status, r.prompt_tokens, r.completion_tokens, r.ttft_ms,
                    r.latency_ms, r.cost_usd,
-                   e.status AS eval_status, e.quality, e.passed, e.valid_schema, e.basis,
-                   e.judge_cost_usd
+                   e.status AS eval_status, e.quality, e.passed, e.valid_schema,
+                   e.valid_args, e.basis, e.judge_cost_usd, s.session_id
             FROM run_results r LEFT JOIN evaluations e ON e.result_id = r.id
+            LEFT JOIN run_samples s ON s.run_id = r.run_id AND s.request_id = r.request_id
             WHERE r.run_id = :run_id
             """
         )
@@ -151,6 +152,8 @@ class EvaluationRepository:
                     quality=row.quality,
                     passed=row.passed,
                     valid_schema=row.valid_schema,
+                    valid_args=row.valid_args,
+                    session_id=row.session_id,
                     basis=row.basis,
                     judge_cost_usd=None
                     if row.judge_cost_usd is None
@@ -183,6 +186,12 @@ class EvaluationRepository:
                     pass_rate_low=agg.pass_rate_low,
                     pass_rate_high=agg.pass_rate_high,
                     valid_rate=agg.valid_rate,
+                    valid_args_rate=agg.valid_args_rate,
+                    n_sessions=agg.n_sessions,
+                    n_sessions_passed=agg.n_sessions_passed,
+                    session_pass_rate=agg.session_pass_rate,
+                    session_pass_low=agg.session_pass_low,
+                    session_pass_high=agg.session_pass_high,
                     prompt_tokens_avg=agg.prompt_tokens_avg,
                     completion_tokens_avg=agg.completion_tokens_avg,
                     latency_p50_ms=agg.latency_p50_ms,
