@@ -114,7 +114,9 @@ class CalibrationRepository:
                    length(request_payload::text) AS chars,
                    coalesce(jsonb_typeof(request_payload->'tools') = 'array'
                             AND jsonb_array_length(request_payload->'tools') > 0,
-                            false) AS has_tools
+                            false) AS has_tools,
+                   EXISTS (SELECT 1 FROM feedback f
+                           WHERE f.request_id = requests.request_id AND f.rating = -1) AS disliked
             FROM requests
             WHERE project_id = :project_id AND task_type = :task_type
               AND model_id = :reference AND status = 'ok'
@@ -138,7 +140,14 @@ class CalibrationRepository:
             },
         )
         return [
-            PoolItem(r.request_id, "traffic", r.dedup_key, int(r.chars), bool(r.has_tools))
+            PoolItem(
+                r.request_id,
+                "traffic",
+                r.dedup_key,
+                int(r.chars),
+                bool(r.has_tools),
+                disliked=bool(r.disliked),
+            )
             for r in rows
         ]
 

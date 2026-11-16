@@ -47,6 +47,7 @@ def settings(app_settings, queue_name):
     return app_settings.model_copy(
         update={
             "request_log_queue": queue_name,
+            "feedback_queue": f"{queue_name}_feedback",
             "retry_delays_ms": [100, 200, 300],
             "traffic_batch_size": 50,
             "traffic_batch_wait": 0.05,

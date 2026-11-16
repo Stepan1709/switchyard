@@ -7,9 +7,11 @@ answers are never part of it. The traffic log pipeline (a later stage) plugs in 
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Protocol
 
 from app.core.logging import get_logger
+from app.modules.calibration.pricing import Price
 
 log = get_logger("gateway")
 
@@ -49,6 +51,13 @@ class RequestRecord:
     step: int | None = None
     shadow_model_ids: list[str] = field(default_factory=list)
     fallbacks: int = 0  # how many models were tried before the one that answered
+    # Costing: the prices of the model that answers and of the project's reference model, and
+    # whether the key has a budget to charge. The costs are worked out when the request ends.
+    price: Price | None = None
+    reference_price: Price | None = None
+    cost_usd: Decimal | None = None
+    reference_cost_usd: Decimal | None = None
+    budgeted: bool = False
     extra: dict[str, object] = field(default_factory=dict)
 
 

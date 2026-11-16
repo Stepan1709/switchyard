@@ -32,6 +32,7 @@ from app.core.snapshot import KeyInfo, LiveSnapshot, RouteTarget, SnapshotStore
 from app.modules.evaluation.checks import schema_errors
 from app.modules.gateway import errors, routing
 from app.modules.gateway.body import PreparedBody, build_prepared, parse_body
+from app.modules.gateway.budget import BudgetGuard, price_of, request_cost
 from app.modules.gateway.errors import GatewayError
 from app.modules.gateway.ratelimit import RateLimiter, RateResult
 from app.modules.gateway.record import Recorder, RequestRecord
@@ -74,8 +75,11 @@ class GatewayProxy:
         limiter: RateLimiter,
         recorder: Recorder,
         resolver: ssrf.Resolver,
+        budget: BudgetGuard | None = None,
     ) -> None:
         self.settings = settings
+        self.budget = budget
+        self._background: set[asyncio.Task[None]] = set()
         self.store = store
         self.http = http
         self.limiter = limiter
@@ -174,10 +178,27 @@ class GatewayProxy:
 
     def _finish(self, rec: RequestRecord, started: float) -> None:
         rec.duration_ms = _ms(started)
+        if rec.price is not None:
+            rec.cost_usd = request_cost(rec.price, rec.prompt_tokens, rec.completion_tokens)
+        if rec.reference_price is not None:
+            rec.reference_cost_usd = request_cost(
+                rec.reference_price, rec.prompt_tokens, rec.completion_tokens
+            )
+        self._charge(rec)
         try:
             self.recorder.submit(rec)
         except Exception as exc:  # the answer to the client must never depend on bookkeeping
             log.error("record_failed", error=type(exc).__name__)
+
+    def _charge(self, rec: RequestRecord) -> None:
+        """Add the cost to the key's month, off the request path (never delays or fails it)."""
+        if not rec.budgeted or self.budget is None or rec.key_id is None or not rec.cost_usd:
+            return
+        task = asyncio.get_running_loop().create_task(
+            self.budget.charge(rec.key_id, rec.cost_usd), name="budget-charge"
+        )
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
 
     # ---- entry point ----
     async def chat(self, request: Request) -> Response:
@@ -192,6 +213,9 @@ class GatewayProxy:
                 key = self.authenticate(request, live)
                 rec.key_id, rec.project_id = key.key_id, key.project_id
                 base_headers.update(await self._rate_limit(key))
+                rec.budgeted = key.monthly_budget_usd is not None
+                if self.budget is not None and await self.budget.exceeded(key):
+                    raise errors.budget_exceeded()
 
                 raw = await self._read_body(request)
                 task_type = request.headers.get("x-task-type") or key.default_task_type
@@ -213,6 +237,8 @@ class GatewayProxy:
                 rec.mask_pii = project.mask_pii
                 base_headers["x-switchyard-mode"] = plan.mode
                 self._point_at(rec, base_headers, target)
+                if project.reference is not None:
+                    rec.reference_price = price_of(project.reference)
 
                 prepared = build_prepared(parsed, target.model_name)
                 rec.stream, rec.requested_model = prepared.stream, prepared.requested_model
@@ -251,6 +277,7 @@ class GatewayProxy:
         """Say which model this request is going to (updated if a fallback takes over)."""
         rec.model, rec.provider = target.model_name, target.provider_name
         rec.model_id, rec.provider_id = target.model_id, target.provider_id
+        rec.price = price_of(target)
         headers["x-switchyard-model"] = target.model_name
 
     # ---- the provider call ----

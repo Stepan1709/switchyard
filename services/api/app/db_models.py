@@ -10,10 +10,12 @@ from types import ModuleType
 from typing import Any
 
 from app.core import idempotency, inbox, outbox
+from app.modules.analytics import models as analytics_models
 from app.modules.audit import models as audit_models
 from app.modules.auth import models as auth_models
 from app.modules.calibration import models as calibration_models
 from app.modules.evaluation import models as evaluation_models
+from app.modules.feedback import models as feedback_models
 from app.modules.projects import models as projects_models
 from app.modules.registry import models as registry_models
 from app.modules.routing import models as routing_models
@@ -23,10 +25,12 @@ ALL_MODEL_MODULES: tuple[ModuleType, ...] = (
     idempotency,
     inbox,
     outbox,
+    analytics_models,
     audit_models,
     auth_models,
     calibration_models,
     evaluation_models,
+    feedback_models,
     projects_models,
     registry_models,
     routing_models,

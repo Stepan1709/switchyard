@@ -17,6 +17,7 @@ from app.core.config import Settings
 from app.core.crypto import KeyRing
 from app.core.logging import configure_logging, get_logger
 from app.core.snapshot import SnapshotStore
+from app.modules.gateway.budget import BudgetGuard
 from app.modules.gateway.errors import GatewayError
 from app.modules.gateway.events import TrafficEventPublisher
 from app.modules.gateway.proxy import GatewayProxy
@@ -81,6 +82,7 @@ def create_app(
             RateLimiter(redis),
             recorder or CompositeRecorder(LogRecorder(settings.gateway_log_requests), events),
             resolver or ssrf.CachingResolver(settings.gateway_resolve_cache_ttl),
+            BudgetGuard(redis),
         )
         await store.refresh()  # so that the first request already finds a snapshot
         refresher = asyncio.create_task(store.run(), name="snapshot-refresh")

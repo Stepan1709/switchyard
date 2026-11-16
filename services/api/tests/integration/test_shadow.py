@@ -30,6 +30,7 @@ def settings(app_settings, queue_name):
     return app_settings.model_copy(
         update={
             "request_log_queue": f"{queue_name}_log",
+            "feedback_queue": f"{queue_name}_feedback",
             "replay_queue": f"{queue_name}_replay",
             "run_finished_queue": f"{queue_name}_done",
             "judge_queue": f"{queue_name}_judge",

@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -10,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     PrimaryKeyConstraint,
     SmallInteger,
     String,
@@ -71,6 +73,10 @@ class TrafficRequest(Base):
     # messages. `step` counts the assistant turns before this request (0 = the first step).
     session_id: Mapped[str | None] = mapped_column(String(128))
     step: Mapped[int | None] = mapped_column(SmallInteger)
+    # What the request cost at the prices of the moment, and what the same tokens would have
+    # cost on the project's reference model (null: the tokens are unknown, e.g. an error).
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 8))
+    reference_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 8))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -9,6 +9,7 @@ The sample must be
   the pool has, so a small sample does not accidentally contain only easy requests.
 """
 
+import math
 import random
 import uuid
 from collections import defaultdict
@@ -26,6 +27,7 @@ class PoolItem:
     prompt_chars: int  # size of the request (a stand-in for the token count)
     has_tools: bool
     session_id: str | None = None  # set when the unit is a whole conversation
+    disliked: bool = False  # a user rated the recorded answer badly
 
 
 def deduplicate(items: Sequence[PoolItem]) -> list[PoolItem]:
@@ -102,6 +104,27 @@ def pick_stratified(items: Sequence[PoolItem], n: int, seed: int) -> list[PoolIt
         rng = random.Random(f"{seed}:{key}")
         chosen.extend(rng.sample(strata[key], quota[key]))
     return sorted(chosen, key=lambda i: str(i.request_id))
+
+
+def choose_with_priority(
+    items: Sequence[PoolItem], n: int, strategy: str, seed: int, share: float
+) -> list[PoolItem]:
+    """Like `choose`, but requests that users disliked come first: they take up to `share` of
+    the sample (a dislike is the best hint of where a model is weak), and the rest is picked
+    from the others by the usual strategy. Without enough disliked ones all of them are used."""
+    pool = deduplicate(items)
+    disliked = [i for i in pool if i.disliked]
+    if not disliked or n <= 0:
+        return choose(pool, n, strategy, seed)
+    take = min(len(disliked), math.ceil(n * share))
+    first = pick_random(disliked, take, seed)
+    taken = {i.request_id for i in first}
+    others = [i for i in pool if not i.disliked]
+    more = (pick_stratified if strategy == "stratified" else pick_random)(others, n - take, seed)
+    if len(more) < n - take:  # too few ordinary requests: top up with the disliked ones left
+        left = [i for i in disliked if i.request_id not in taken]
+        more += pick_random(left, n - take - len(more), seed)
+    return sorted([*first, *more], key=lambda i: str(i.request_id))
 
 
 def choose(items: Sequence[PoolItem], n: int, strategy: str, seed: int) -> list[PoolItem]:

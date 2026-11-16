@@ -6,6 +6,7 @@ new processes run side by side during a deploy, and old messages may still sit i
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
@@ -15,6 +16,7 @@ REQUEST_COMPLETED = "request.completed"
 REPLAY_EXECUTE = "replay.execute"
 CALIBRATION_RUN_FINISHED = "calibration.run.finished"
 SHADOW_EXECUTE = "shadow.execute"  # send a copy of a live request to a candidate model
+FEEDBACK_SUBMITTED = "feedback.submitted"  # a client rated an answer
 RULES_CHANGED = "rules.changed"  # a routing rule or a task type mode changed
 JUDGE_EXECUTE = "judge.execute"  # evaluate one replay result (checks and, if needed, the judge)
 
@@ -51,6 +53,9 @@ class RequestCompleted(BaseModel):
     # the conversation and the step in it (see gateway/session.py)
     session_id: str | None = None
     step: int | None = None
+    # what the request cost, and what the same tokens would have cost on the reference model
+    cost_usd: Decimal | None = None
+    reference_cost_usd: Decimal | None = None
     # Not a column: models that should get a copy of this request (shadow mode). The writer
     # turns it into jobs in the same transaction that stores the request.
     shadow_model_ids: list[uuid.UUID] = []
