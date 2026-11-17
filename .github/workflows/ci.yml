@@ -74,8 +74,8 @@ jobs:
             nginx:1.30.6-alpine nginx -t
       - name: Prometheus rules
         run: |
-          docker run --rm --entrypoint promtool -v "$PWD/deploy/prometheus:/p:ro" prom/prometheus:v3.15.1 check rules /p/alerts.yml
-          docker run --rm --entrypoint promtool -v "$PWD/deploy/prometheus:/p:ro" prom/prometheus:v3.15.1 check config /p/prometheus.yml
+          # mounted where the configuration expects it: it points at /etc/prometheus/alerts.yml
+          docker run --rm --entrypoint promtool -v "$PWD/deploy/prometheus:/etc/prometheus:ro" prom/prometheus:v3.15.1 check config /etc/prometheus/prometheus.yml
       - name: Shell scripts
         run: shellcheck deploy/prod/*.sh deploy/backup/*.sh
 
