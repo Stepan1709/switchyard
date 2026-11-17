@@ -7,7 +7,7 @@ SECRETS := postgres_password redis_password rabbitmq_password jwt_secret key_pep
 export UV_LINK_MODE := copy
 
 .DEFAULT_GOAL := help
-.PHONY: help env secrets up up-full chaos load down logs migrate create-admin check-shutdown bench test lint fmt check-compose pre-commit
+.PHONY: help env secrets up up-full chaos load down logs migrate create-admin check-shutdown bench test clean-test-containers lint fmt check-compose pre-commit
 
 help: ## List commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -70,10 +70,22 @@ bench: ## Gateway overhead vs the mock provider (start with: MOCK_TIME_SCALE=0 m
 check-shutdown: ## Time `docker compose stop api`: graceful shutdown must take a few seconds
 	python3 scripts/check_shutdown.py
 
-test: ## Unit and integration tests of all services
-	@for s in $(SERVICES); do \
-	  echo "== $$s"; (cd services/$$s && uv run pytest) || exit 1; \
-	done
+test: ## Unit and integration tests of all services (test containers are removed afterwards)
+	@status=0; \
+	for s in $(SERVICES); do \
+	  echo "== $$s"; (cd services/$$s && uv run pytest) || { status=$$?; break; }; \
+	done; \
+	$(MAKE) --no-print-directory clean-test-containers; \
+	exit $$status
+
+# The integration tests start PostgreSQL, Redis and RabbitMQ with testcontainers and remove them
+# at the end of the session; a run that is interrupted leaves them behind. Everything they start
+# carries this label, so the cleanup cannot touch the containers of `make up` or of other
+# projects. Do not run two test sessions at once: the first to finish would remove the other's.
+clean-test-containers: ## Remove containers left behind by tests (testcontainers label)
+	@ids=$$(docker ps -aq --filter label=org.testcontainers=true); \
+	if [ -n "$$ids" ]; then echo "removing leftover test containers: $$(echo $$ids | wc -w)"; \
+	  docker rm -f $$ids > /dev/null; fi
 
 lint: ## ruff + mypy
 	@for s in $(SERVICES); do \
