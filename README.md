@@ -1,8 +1,12 @@
 # Switchyard
 
+[![CI](https://github.com/Stepan1709/switchyard/actions/workflows/ci.yml/badge.svg)](https://github.com/Stepan1709/switchyard/actions/workflows/ci.yml)
+![coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Stepan1709/switchyard/badges/coverage.json)
+![license](https://img.shields.io/badge/license-MIT-blue)
+
 A self-hosted, OpenAI-compatible LLM gateway. It records real application traffic, replays it on local and external models of different sizes, compares quality, latency and cost, and lets a human choose routing rules: which kind of request is handled by which model. The gateway then applies the rules in production and reports spend, savings, server utilisation and user feedback.
 
-> Status: early development. The infrastructure and the control-plane service skeleton (config, logging, health checks, migrations, graceful shutdown) are in place; the gateway, worker and admin UI are being built step by step.
+Use it by changing one line in your application: the `base_url` of its OpenAI client points at the gateway (`https://<host>/v1`), and the API key is a key created in the web interface. Send an `x-task-type` header to say what kind of request it is.
 
 ## Architecture
 
@@ -35,6 +39,7 @@ Requirements: Linux or WSL2, Docker with Compose v2, `make`, `uv`, `git`.
 make secrets   # random dev passwords in deploy/secrets/dev (not committed)
 make up        # postgres, redis, rabbitmq, migrations, api, gateway, worker, web, mock_llm + Adminer; waits for healthchecks
 make test      # unit and integration tests (integration tests start containers via Docker)
+make e2e       # the whole product path on the running stack
 make lint      # ruff + mypy
 make migrate   # apply database migrations (also runs automatically before api on `make up`)
 make create-admin EMAIL=you@example.com   # create an administrator (password prompt)
@@ -494,13 +499,49 @@ How to read it:
 - The worker writes the traffic log at about 140 rows/s on one CPU and replays about 3,000 calibration requests per minute (the mock is instant: a real provider is the limit there).
 - To carry more, run more gateway containers: their state is a copy of the snapshot, and limits and budgets live in Redis.
 
+## Run in production
+
+What you need: a Linux server with Docker (Compose v2), `openssl` and `git`, ports 80 and 443 open, and optionally a domain that points at it. Releases publish multi-architecture images (amd64, arm64) to `ghcr.io/<owner>/switchyard-*`; the server only pulls them, nothing is built there.
+
+```bash
+git clone https://github.com/Stepan1709/switchyard.git /opt/switchyard && cd /opt/switchyard
+deploy/prod/setup.sh                 # secrets in /etc/switchyard/secrets, a self-signed certificate, deploy/prod/.env
+$EDITOR deploy/prod/.env             # ADMIN_EMAIL, and DOMAIN if you have one
+deploy/prod/deploy.sh v0.1.0         # pull that version, start it, check it is healthy
+deploy/prod/tls.sh example.com you@example.com   # a Let's Encrypt certificate, renewed by itself
+```
+
+Sign in at `https://<server>/` with `ADMIN_EMAIL` and the password in `/etc/switchyard/secrets/admin_password`.
+
+- **Only nginx is published** (80 and 443). It serves the web interface at `/`, the gateway at `/v1/` (streaming without buffering) and the admin API at `/api/`; `/metrics` is never published. Failed logins are rate limited, and the client address is passed to the services (`TRUST_FORWARDED_FOR`) so that the login throttle sees the visitor.
+- **Hardening.** The application containers run with a read-only file system, no Linux capabilities and no way to gain privileges. Secrets are files outside the repository, never environment variables.
+- **Certificates.** Without a domain nginx serves the self-signed certificate that `setup.sh` made. With one, `tls.sh` gets a Let's Encrypt certificate through the `certbot` service, which then renews it; nginx reloads on a timer and picks it up.
+- **Upgrades and rollback.** `deploy/prod/deploy.sh <version>` takes a database dump first, then starts the version and waits for the health checks; if they fail it goes back to the previous version by itself. `deploy/prod/rollback.sh` does the same on demand. Migrations only add, so the database is not rolled back; if the data has to go back, restore the dump (below).
+- **Backups.** The `backup` service dumps the database every day into the `backups` volume and keeps the newest seven. `make backup-check` restores the newest dump into a scratch database and compares it with the live one (CI does this on every change). To restore for real: `deploy/prod/stack.sh stop-apps`, `deploy/backup/restore.sh <dump>`, `deploy/prod/stack.sh start`. Keep a copy of `/etc/switchyard/secrets/master_keys` elsewhere: the providers' API keys cannot be read without it.
+- **Monitoring.** Add `monitoring` (and `tracing`) to `COMPOSE_PROFILES` in `deploy/prod/.env`. Grafana and Prometheus are not published; reach them through an SSH tunnel (`ssh -L 3000:localhost:3000 ...` after publishing the port you need on localhost).
+
+### Releases and deployment from GitHub
+
+Pushing a tag such as `v0.1.0` (it must be on `main`) runs `release.yml`: it builds and publishes the images, and creates the GitHub release. If a server is set up it also deploys the tag. To turn that on, in the repository settings:
+
+- variable `DEPLOY_ENABLED` = `true` (and optionally `VPS_PATH`, default `/opt/switchyard`);
+- secrets `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY` (a deploy key whose public half is in the server's `authorized_keys`) and `VPS_KNOWN_HOSTS` (the output of `ssh-keyscan <host>`);
+- make the three GHCR packages public (or `docker login ghcr.io` on the server with a read token).
+
+Without them a release only publishes the images.
+
+### Continuous integration
+
+`ci.yml` runs on every pull request and on `main`: lint and types per service, a secret scan, validation of the compose files, nginx configuration, Prometheus rules and shell scripts, the unit and integration tests with a coverage threshold per service, the image builds with a vulnerability scan (Trivy, serious fixable findings fail the build), and an end-to-end run on a started stack (`make e2e`: project and key, recorded traffic, calibration, recommendation, rule, routed traffic, savings) followed by a backup restore check. Dependabot proposes updates for the Python dependencies, the base images and the actions (pinned to commits).
+
 ## Repository layout
 
 ```
 services/api/   application code (api, gateway and worker entry points), migrations, tests, Dockerfile
 services/web/   admin web interface (pages, sessions, tests, Dockerfile)
 services/mock_llm/   OpenAI-compatible provider simulator
-deploy/         compose files, Prometheus and Grafana configuration, secret templates
+deploy/         compose files (dev, production), nginx, Prometheus and Grafana, backup and server scripts
+.github/        CI, release and Dependabot configuration
 scripts/        helper scripts: gateway benchmark, failure scenarios (chaos), load driver
 loadtest/       Locust scenarios
 docs/adr/       architecture decision records

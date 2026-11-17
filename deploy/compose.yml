@@ -283,6 +283,33 @@ services:
         limits: {cpus: "0.5", memory: 128M}
     logging: *logging
 
+  # ---- backups (profile `backup`) ----
+  # A dump of the database every BACKUP_INTERVAL_SECONDS (a day), the newest BACKUP_KEEP kept in
+  # the `backups` volume. `make backup-check` restores the newest one into a scratch database
+  # and compares it with the live one. Production runs it by default.
+  backup:
+    image: postgres:17.11-alpine
+    profiles: [backup]
+    init: true
+    restart: unless-stopped
+    entrypoint: ["sh", "/backup/backup.sh"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    secrets: [postgres_password]
+    volumes:
+      - ./backup:/backup:ro
+      - backups:/backups
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [data]
+    deploy:
+      resources:
+        limits: {cpus: "0.25", memory: 128M}
+    logging: *logging
+
   # ---- monitoring (profile `monitoring`) ----
   # Prometheus scrapes /metrics of api, gateway and worker; Grafana shows two dashboards
   # (gateway, pipeline) read from files, so they are versioned with the code.
@@ -379,5 +406,6 @@ volumes:
   postgres_data:
   redis_data:
   rabbitmq_data:
+  backups:
   prometheus_data:
   grafana_data:

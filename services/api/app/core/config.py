@@ -212,6 +212,12 @@ class Settings(BaseSettings):
     admin_email: str = ""
     admin_password: SecretStr = SecretStr("")
 
+    # Behind nginx every request comes from the proxy's address. When this is on, the address
+    # in X-Forwarded-For (which nginx sets itself, replacing what the client sent) is used for
+    # the login throttle and the audit log. Leave it off when clients can reach the api
+    # directly: they could then name any address.
+    trust_forwarded_for: bool = False
+
     # Observability. Metrics are always on; tracing is opt-in (the `tracing` profile).
     otel_enabled: bool = False
     otel_endpoint: str = "http://jaeger:4318"

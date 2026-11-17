@@ -7,7 +7,7 @@ SECRETS := postgres_password redis_password rabbitmq_password jwt_secret key_pep
 export UV_LINK_MODE := copy
 
 .DEFAULT_GOAL := help
-.PHONY: help env secrets up up-full chaos load down logs migrate create-admin check-shutdown bench test clean-test-containers lint fmt check-compose pre-commit
+.PHONY: help env secrets up up-full chaos load e2e backup-check logs-dump down logs migrate create-admin check-shutdown bench test clean-test-containers lint fmt check-compose pre-commit
 
 help: ## List commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -57,6 +57,19 @@ load: env secrets ## Load tests with container limits of a small VPS; prints the
 	$(LOAD_ENV) $(COMPOSE) -f deploy/compose.load.yml up -d --build --wait
 	$(LOAD_ENV) COMPOSE_FILES="deploy/compose.yml deploy/compose.dev.yml deploy/compose.load.yml" \
 	  uv run --project loadtest python scripts/load.py
+
+e2e: ## The whole path of the product on the running stack (make up first)
+	cd services/api && uv run python ../../scripts/e2e.py
+
+backup-check: env secrets ## Restore the newest database backup into a scratch database and compare it with the live one
+	$(COMPOSE) --profile backup up -d --wait backup
+	@for i in $$(seq 1 30); do \
+	  $(COMPOSE) exec -T backup sh -c 'ls /backups/switchyard-*.dump' >/dev/null 2>&1 && break; sleep 2; \
+	done
+	$(COMPOSE) exec -T backup sh /backup/verify.sh
+
+logs-dump: ## Print the last lines of every container's log (for a failed CI run)
+	$(COMPOSE) --profile '*' logs --no-color --tail=200
 
 migrate: env secrets ## Apply database migrations (one-shot container)
 	$(COMPOSE) run --rm --build migrate

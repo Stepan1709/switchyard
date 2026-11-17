@@ -90,7 +90,8 @@ class Admin:
         return cls(client, r.json()["access_token"])
 
     async def call(self, method: str, path: str, **kw: Any) -> httpx.Response:
-        return await self.client.request(method, f"{API}{path}", headers=self.headers, **kw)
+        headers = {**self.headers, **kw.pop("headers", {})}
+        return await self.client.request(method, f"{API}{path}", headers=headers, **kw)
 
     async def find(self, path: str, name: str) -> dict[str, Any] | None:
         items = (await self.call("GET", path)).json()

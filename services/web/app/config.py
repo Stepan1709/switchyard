@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     anonymous_ttl_seconds: int = 900
     # Over http (local development) a Secure cookie would never come back.
     cookie_secure: bool = True
+    # Behind nginx the visitor's address is in X-Forwarded-For. When this is on it is passed on
+    # to the api, so that its login throttle and audit log see the visitor, not this container.
+    trust_forwarded_for: bool = False
     # Refresh the access token this long before it expires.
     refresh_margin_seconds: int = 30
 

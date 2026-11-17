@@ -1,5 +1,6 @@
 """Per-request context of a page: the session, the api client and rendering helpers."""
 
+import ipaddress
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -24,6 +25,18 @@ NAV = (
     ("feedback", "Feedback", "/feedback"),
     ("projects", "Projects", "/projects"),
 )
+
+
+def visitor_address(request: Request, trust_forwarded_for: bool) -> str | None:
+    """The visitor's address as the proxy in front of this app reports it (None if it is not
+    trusted or not an IP address)."""
+    if not trust_forwarded_for:
+        return None
+    first = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    try:
+        return str(ipaddress.ip_address(first))
+    except ValueError:
+        return None
 
 
 def is_htmx(request: Request) -> bool:
@@ -122,7 +135,13 @@ def make_ctx(request: Request, session: Session) -> Ctx:
     return Ctx(
         request=request,
         session=session,
-        api=ApiClient(state.api_http, store, session, state.settings),
+        api=ApiClient(
+            state.api_http,
+            store,
+            session,
+            state.settings,
+            forwarded_for=visitor_address(request, state.settings.trust_forwarded_for),
+        ),
         store=store,
         templates=state.templates,
         settings=state.settings,

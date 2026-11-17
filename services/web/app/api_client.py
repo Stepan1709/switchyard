@@ -49,15 +49,22 @@ def problem(response: httpx.Response) -> ApiError:
     return ApiError(response.status_code, title, detail)
 
 
+def forwarded_headers(address: str | None) -> dict[str, str]:
+    return {"x-forwarded-for": address} if address else {}
+
+
 class PublicApi:
     """Calls that need no login (the login itself)."""
 
-    def __init__(self, http: httpx.AsyncClient) -> None:
+    def __init__(self, http: httpx.AsyncClient, forwarded_for: str | None = None) -> None:
         self.http = http
+        self.forwarded_for = forwarded_for
 
     async def post(self, path: str, json: Any) -> Any:
         try:
-            response = await self.http.post(path, json=json)
+            response = await self.http.post(
+                path, json=json, headers=forwarded_headers(self.forwarded_for)
+            )
         except httpx.HTTPError as exc:
             raise ApiError(503, "The api is not reachable", type(exc).__name__) from exc
         if response.status_code >= 400:
@@ -67,12 +74,18 @@ class PublicApi:
 
 class ApiClient:
     def __init__(
-        self, http: httpx.AsyncClient, store: SessionStore, session: Session, settings: Settings
+        self,
+        http: httpx.AsyncClient,
+        store: SessionStore,
+        session: Session,
+        settings: Settings,
+        forwarded_for: str | None = None,
     ) -> None:
         self.http = http
         self.store = store
         self.session = session
         self.settings = settings
+        self.forwarded_for = forwarded_for
 
     # ---- tokens ----
     async def _renew_if_needed(self, *, force: bool = False) -> None:
@@ -120,6 +133,7 @@ class ApiClient:
         await self._renew_if_needed()
         for attempt in (1, 2):
             merged = {"authorization": f"Bearer {self.session.data.get('access_token', '')}"}
+            merged.update(forwarded_headers(self.forwarded_for))
             merged.update(headers or {})
             try:
                 response = await self.http.request(

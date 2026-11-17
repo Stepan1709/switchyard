@@ -108,3 +108,29 @@ async def test_logs_are_json_with_correlation_id(client, capsys):
     assert entry["correlation_id"] == "rid-42"
     assert entry["service"] == "api" and entry["env"] == "test"
     assert entry["level"] == "info" and entry["status"] == 200 and "timestamp" in entry
+
+
+# ---- the caller's address behind a proxy -------------------------------------------------------
+def _request(xff: str | None, peer: str = "10.0.0.9", trust: bool = False):
+    from types import SimpleNamespace
+
+    from app.core.config import Settings
+
+    headers = {"x-forwarded-for": xff} if xff is not None else {}
+    app = SimpleNamespace(state=SimpleNamespace(settings=Settings(trust_forwarded_for=trust)))
+    return SimpleNamespace(app=app, headers=headers, client=SimpleNamespace(host=peer))
+
+
+def test_the_forwarded_address_is_used_only_when_it_is_trusted():
+    from app.modules.auth.deps import client_ip
+
+    assert client_ip(_request("203.0.113.7", trust=True)) == "203.0.113.7"
+    assert client_ip(_request("203.0.113.7, 10.0.0.1", trust=True)) == "203.0.113.7"
+    assert client_ip(_request("203.0.113.7", trust=False)) == "10.0.0.9"  # a client could lie
+
+
+def test_a_forwarded_value_that_is_not_an_address_falls_back_to_the_peer():
+    from app.modules.auth.deps import client_ip
+
+    assert client_ip(_request("evil, 1.2.3.4", trust=True)) == "10.0.0.9"
+    assert client_ip(_request(None, trust=True)) == "10.0.0.9"
