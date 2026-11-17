@@ -135,7 +135,8 @@ class CalibrationRepository:
             FROM requests
             WHERE project_id = :project_id AND task_type = :task_type
               AND model_id = :reference AND status = 'ok'
-              AND request_payload IS NOT NULL AND response_payload IS NOT NULL
+              AND jsonb_typeof(request_payload) = 'object'
+              AND jsonb_typeof(response_payload) = 'object'
               AND NOT payload_skipped
               AND (CAST(:since AS timestamptz) IS NULL OR started_at >= :since)
               AND (CAST(:until AS timestamptz) IS NULL OR started_at < :until)
@@ -191,7 +192,8 @@ class CalibrationRepository:
             FROM requests
             WHERE project_id = :project_id AND task_type = :task_type
               AND model_id = :reference AND status = 'ok' AND session_id IS NOT NULL
-              AND request_payload IS NOT NULL AND response_payload IS NOT NULL
+              AND jsonb_typeof(request_payload) = 'object'
+              AND jsonb_typeof(response_payload) = 'object'
               AND NOT payload_skipped
               AND (CAST(:since AS timestamptz) IS NULL OR started_at >= :since)
               AND (CAST(:until AS timestamptz) IS NULL OR started_at < :until)
@@ -235,7 +237,8 @@ class CalibrationRepository:
                    prompt_tokens, completion_tokens
             FROM requests
             WHERE project_id = :project_id AND session_id = ANY(:ids) AND model_id = :reference
-              AND status = 'ok' AND request_payload IS NOT NULL AND response_payload IS NOT NULL
+              AND status = 'ok' AND jsonb_typeof(request_payload) = 'object'
+              AND jsonb_typeof(response_payload) = 'object'
               AND NOT payload_skipped
             ORDER BY session_id, step
             """
