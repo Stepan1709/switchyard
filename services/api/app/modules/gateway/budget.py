@@ -18,6 +18,7 @@ import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from functools import lru_cache
+from typing import Any
 
 from redis.asyncio import Redis
 
@@ -44,6 +45,11 @@ def _price(cost_type: str, input_per_1m: str | None, output_per_1m: str | None) 
     if cost_type == "per_token" and input_per_1m is not None and output_per_1m is not None:
         return Price("per_token", Decimal(input_per_1m), Decimal(output_per_1m))
     return Price("fixed_monthly")  # also a model with no price yet: it adds nothing per request
+
+
+def price_cache_info() -> Any:
+    """Hits and misses of the price cache, for the metrics."""
+    return _price.cache_info()
 
 
 def price_of(target: RouteTarget) -> Price:

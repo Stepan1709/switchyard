@@ -21,6 +21,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+from app.core import metrics, tracing
 from app.core.config import Settings
 from app.core.health import check_dependencies
 from app.core.idempotency import purge_expired
@@ -31,6 +32,7 @@ from app.core.outbox import OutboxRelay
 from app.core.resources import Resources, open_resources
 from app.modules.analytics import budgets, usage
 from app.modules.traffic import partitions
+from app.worker import metrics_job
 
 log = get_logger(__name__)
 
@@ -47,6 +49,7 @@ class WorkerState:
 
 def create_health_app(res: Resources, settings: Settings, state: WorkerState) -> FastAPI:
     app = FastAPI(title="Switchyard worker", docs_url=None, redoc_url=None, openapi_url=None)
+    metrics.add_metrics_endpoint(app, "worker")
 
     @app.get("/health/live")
     async def live() -> dict[str, str]:
@@ -160,6 +163,9 @@ async def run_worker(
             batch_size=settings.outbox_batch_size,
             unroutable_attempts=settings.outbox_unroutable_attempts,
         )
+        queue_list = metrics_job.queue_names(
+            [c.spec.name for c in state.consumers], len(settings.retry_delays_ms)
+        )
         relay_task = asyncio.create_task(state.relay.run(), name="outbox-relay")
         maintenance_task = asyncio.create_task(_maintenance(res, settings, stop))
         periodic_tasks = [
@@ -170,6 +176,22 @@ async def run_worker(
                     lambda: usage.recompute_recent(
                         res.session_factory, settings.usage_recompute_days
                     ),
+                    stop,
+                )
+            ),
+            asyncio.create_task(
+                _periodic(
+                    "queue_metrics",
+                    settings.metrics_refresh_seconds,
+                    lambda: metrics_job.collect_queue_depths(res.amqp_connection, queue_list),
+                    stop,
+                )
+            ),
+            asyncio.create_task(
+                _periodic(
+                    "database_metrics",
+                    settings.metrics_refresh_seconds,
+                    lambda: metrics_job.collect_database_gauges(res.session_factory),
                     stop,
                 )
             ),
@@ -223,4 +245,5 @@ async def run_worker(
 def main(specs_factory: SpecsFactory) -> None:
     settings = Settings(service_name="worker")
     configure_logging(settings.service_name, settings.env, settings.log_level)
+    tracing.setup(settings)
     asyncio.run(run_worker(settings, specs_factory))

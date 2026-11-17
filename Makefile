@@ -7,7 +7,7 @@ SECRETS := postgres_password redis_password rabbitmq_password jwt_secret key_pep
 export UV_LINK_MODE := copy
 
 .DEFAULT_GOAL := help
-.PHONY: help env secrets up down logs migrate create-admin check-shutdown bench test lint fmt check-compose pre-commit
+.PHONY: help env secrets up up-full down logs migrate create-admin check-shutdown bench test lint fmt check-compose pre-commit
 
 help: ## List commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -35,11 +35,14 @@ secrets: ## Generate dev secrets in deploy/secrets/dev (existing ones are kept)
 up: env secrets ## Start the stack: postgres, redis, rabbitmq, migrations, api, mock_llm + Adminer
 	$(COMPOSE) up -d --build --wait
 
-down: ## Stop everything
-	$(COMPOSE) down
+down: ## Stop everything (including the monitoring and tracing profiles)
+	$(COMPOSE) --profile '*' down
 
 logs: ## Follow container logs
 	$(COMPOSE) logs -f --tail=100
+
+up-full: env secrets ## make up + Prometheus, Grafana (:3000) and Jaeger (:16686), with tracing switched on
+	OTEL_ENABLED=true $(COMPOSE) --profile monitoring --profile tracing up -d --build --wait
 
 migrate: env secrets ## Apply database migrations (one-shot container)
 	$(COMPOSE) run --rm --build migrate

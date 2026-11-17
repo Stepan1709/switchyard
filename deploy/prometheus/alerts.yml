@@ -1,0 +1,27 @@
+groups:
+  - name: switchyard
+    rules:
+      # A dead-letter queue is where messages go after their retries ran out. It should be
+      # empty; a queue that gets bigger means some kind of message keeps failing for good.
+      - alert: DeadLetterQueueGrowing
+        expr: delta(switchyard_queue_messages{queue=~".+[.]dlq"}[10m]) > 0
+        for: 1m
+        labels: {severity: warning}
+        annotations:
+          summary: "Dead-letter queue {{ $labels.queue }} is growing"
+          description: "{{ $value }} more messages in {{ $labels.queue }} over the last 10 minutes. Inspect them with `python -m app.cli dlq list {{ $labels.queue }}`."
+
+      # Calls to a provider that did not end in an answer (timeouts, 5xx, 429, unreachable).
+      # Needs some traffic so that one failed call at night does not raise it.
+      - alert: ProviderErrorRateHigh
+        expr: |
+          (
+            sum by (provider) (rate(switchyard_provider_attempts_total{outcome!="ok"}[5m]))
+            / sum by (provider) (rate(switchyard_provider_attempts_total[5m]))
+          ) > 0.2
+          and sum by (provider) (rate(switchyard_provider_attempts_total[5m])) > 0.05
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Provider {{ $labels.provider }} fails {{ $value | humanizePercentage }} of calls"
+          description: "More than 20% of the calls to {{ $labels.provider }} failed in the last 5 minutes. Requests fall back to the next model of their rule where there is one."

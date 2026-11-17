@@ -9,10 +9,21 @@ import sys
 from contextvars import ContextVar
 
 import structlog
+from opentelemetry import trace
 from structlog.typing import EventDict, Processor
 
 # One id per request; it is also the id returned to the client as x-request-id.
 correlation_id_var: ContextVar[str | None] = ContextVar("correlation_id", default=None)
+
+
+def _add_trace_context(_: object, __: str, event_dict: EventDict) -> EventDict:
+    """trace_id and span_id of the active span, next to correlation_id, so that a log line
+    can be found from a trace and the other way round."""
+    ctx = trace.get_current_span().get_span_context()
+    if ctx.is_valid:
+        event_dict["trace_id"] = format(ctx.trace_id, "032x")
+        event_dict["span_id"] = format(ctx.span_id, "016x")
+    return event_dict
 
 
 def _add_correlation_id(_: object, __: str, event_dict: EventDict) -> EventDict:
@@ -34,6 +45,7 @@ def configure_logging(service: str, env: str, level: str = "INFO") -> None:
         structlog.processors.TimeStamper(fmt="iso", utc=True, key="timestamp"),
         add_service,
         _add_correlation_id,
+        _add_trace_context,
     ]
 
     structlog.configure(
