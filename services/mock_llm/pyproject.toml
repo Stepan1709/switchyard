@@ -4,8 +4,8 @@ version = "0.1.0"
 description = "Switchyard: OpenAI-compatible mock provider with models of different quality, latency and error injection"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "fastapi==0.162.5",
-    "pydantic-settings==2.16.2",
+    "fastapi==0.163.0",
+    "pydantic-settings==2.16.3",
     "uvicorn==0.54.0",
 ]
 
@@ -14,9 +14,9 @@ dev = [
     "httpx==0.28.1",
     "mypy==2.4.1",
     "pytest==9.2.0",
-    "pytest-asyncio==1.4.1.post1",
+    "pytest-asyncio==1.5.0",
     "pytest-cov==7.1.0",
-    "ruff==0.17.4",
+    "ruff==0.17.5",
 ]
 
 [tool.uv]
