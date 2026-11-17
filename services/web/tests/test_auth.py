@@ -196,3 +196,48 @@ async def test_world_helper_is_reusable():
     fake = FakeApi()
     world(fake, role="viewer")
     assert ("GET", "/auth/me") in fake.routes
+
+
+# ---- the visitor's address behind a proxy ------------------------------------------------------
+async def test_the_visitors_address_is_passed_to_the_api_only_when_the_proxy_is_trusted(api, redis):
+    import httpx
+    from asgi_lifespan import LifespanManager
+
+    from app.config import Settings
+    from app.main import create_app
+
+    for trust, expected in ((True, "203.0.113.7"), (False, None)):
+        http = httpx.AsyncClient(transport=httpx.MockTransport(api.handle), base_url="http://api")
+        app = create_app(
+            Settings(cookie_secure=False, api_url="http://api", trust_forwarded_for=trust),
+            redis=redis,
+            api_http=http,
+        )
+        async with (
+            LifespanManager(app),
+            httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://web") as c,
+        ):
+            form = await c.get("/login")
+            api.calls.clear()
+            await c.post(
+                "/login",
+                data={
+                    "email": "a@example.com",
+                    "password": "pw",
+                    "csrf_token": csrf_of(form.text),
+                    "next": "/",
+                },
+                headers={"x-forwarded-for": "203.0.113.7, 10.0.0.1"},
+            )
+        login = api.calls_to("POST", "/auth/login")[0]
+        assert login.headers.get("x-forwarded-for") == expected
+        await http.aclose()
+
+
+async def test_a_forwarded_value_that_is_not_an_address_is_ignored():
+    from types import SimpleNamespace
+
+    from app.ui import visitor_address
+
+    request = SimpleNamespace(headers={"x-forwarded-for": "not-an-address"})
+    assert visitor_address(request, True) is None  # type: ignore[arg-type]

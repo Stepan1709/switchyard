@@ -1,0 +1,106 @@
+name: Release
+
+# A tag like v0.1.0 publishes the images, creates the release and, if a server is configured,
+# deploys the tag to it.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # The release is only as good as the code it was cut from.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: The tag is on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "tag $GITHUB_REF_NAME is not on main" >&2; exit 1; }
+
+  publish:
+    needs: [verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - {name: api, context: services/api}
+          - {name: web, context: services/web}
+          - {name: mock-llm, context: services/mock_llm}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Image name in lower case
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/switchyard-${{ matrix.name }}" >> "$GITHUB_ENV"
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          # The tag as it is written (v0.1.0): that is the version deploy.sh is given.
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  release:
+    needs: [publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --title "$GITHUB_REF_NAME"
+
+  # Runs only when a server is set up: the repository variable DEPLOY_ENABLED is "true" and the
+  # secrets VPS_HOST, VPS_USER, VPS_SSH_KEY and VPS_KNOWN_HOSTS exist (README: Run in production).
+  deploy:
+    if: vars.DEPLOY_ENABLED == 'true'
+    needs: [publish]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy over SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PATH: ${{ vars.VPS_PATH || '/opt/switchyard' }}
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # The server runs the script from its own copy of the repository (it checks out the tag);
+          # if the new version does not become healthy the script goes back by itself.
+          ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            "cd '$VPS_PATH' && deploy/prod/deploy.sh '$GITHUB_REF_NAME'"

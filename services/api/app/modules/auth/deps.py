@@ -1,5 +1,6 @@
 """Authentication dependencies: who is calling and with which role."""
 
+import ipaddress
 from typing import Annotated
 
 from fastapi import Depends, Header, Request
@@ -27,7 +28,15 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
 def client_ip(request: Request) -> str:
-    # Behind nginx this will be taken from a trusted forwarded header (added with nginx).
+    """The caller's address. Behind a trusted proxy (TRUST_FORWARDED_FOR) it is the one the
+    proxy reports; a value that is not an IP address is ignored."""
+    settings = getattr(request.app.state, "settings", None)
+    if settings is not None and settings.trust_forwarded_for:
+        first = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        try:
+            return str(ipaddress.ip_address(first))
+        except ValueError:
+            pass
     return request.client.host if request.client else "unknown"
 
 

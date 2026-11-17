@@ -9,7 +9,7 @@ from fastapi.responses import RedirectResponse, Response
 
 from app.api_client import ApiError, PublicApi
 from app.sessions import Session
-from app.ui import Ctx, action, safe_local_path
+from app.ui import Ctx, action, safe_local_path, visitor_address
 
 router = APIRouter()
 
@@ -73,7 +73,7 @@ async def login(
             request, fresh, next_path=safe_local_path(next),
             error="The form has expired. Please sign in again.", status=400,
         )  # fmt: skip
-    public = PublicApi(state.api_http)
+    public = PublicApi(state.api_http, visitor_address(request, state.settings.trust_forwarded_for))
     try:
         tokens = await public.post("/auth/login", {"email": email, "password": password})
         me = (

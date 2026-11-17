@@ -1,0 +1,134 @@
+# Production: images from the registry by version, secrets from files on the server, nothing
+# published except nginx (80 and 443), read-only containers.
+#
+#   docker compose --env-file deploy/prod/.env -f deploy/compose.yml -f deploy/compose.prod.yml up -d
+#
+# Normally started through deploy/prod/stack.sh and deploy/prod/deploy.sh.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# What every application container gets: no writes to its own file system (a temporary
+# directory only), no Linux capabilities, no way to gain privileges.
+x-hardened: &hardened
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  migrate:
+    <<: *hardened
+    build: !reset null
+    pull_policy: always
+    image: ${IMAGE_REPO}/switchyard-api:${SWITCHYARD_VERSION}
+  api:
+    <<: *hardened
+    build: !reset null
+    pull_policy: always
+    image: ${IMAGE_REPO}/switchyard-api:${SWITCHYARD_VERSION}
+    environment:
+      TRUST_FORWARDED_FOR: "true"  # the only way in is nginx, which sets the address itself
+  gateway:
+    <<: *hardened
+    build: !reset null
+    pull_policy: always
+    image: ${IMAGE_REPO}/switchyard-api:${SWITCHYARD_VERSION}
+  worker:
+    <<: *hardened
+    build: !reset null
+    pull_policy: always
+    image: ${IMAGE_REPO}/switchyard-api:${SWITCHYARD_VERSION}
+  web:
+    <<: *hardened
+    build: !reset null
+    pull_policy: always
+    image: ${IMAGE_REPO}/switchyard-web:${SWITCHYARD_VERSION}
+    environment:
+      TRUST_FORWARDED_FOR: "true"
+      COOKIE_SECURE: "true"
+
+  # The provider simulator is for tests and demos: off in production (profile `mock`).
+  mock_llm:
+    build: !reset null
+    pull_policy: always
+    profiles: [mock]
+    image: ${IMAGE_REPO}/switchyard-mock-llm:${SWITCHYARD_VERSION}
+
+  nginx:
+    image: nginx:1.30.6-alpine
+    init: true
+    restart: unless-stopped
+    read_only: true
+    # The official image writes its configuration and caches at start; keep them in memory.
+    tmpfs: [/var/cache/nginx, /var/run, /tmp]
+    cap_drop: [ALL]
+    # DAC_READ_SEARCH: read the private key in the 700 directory of the host user.
+    cap_add: [CHOWN, SETGID, SETUID, NET_BIND_SERVICE, DAC_READ_SEARCH]
+    security_opt: ["no-new-privileges:true"]
+    # Reload now and then so that a renewed certificate is picked up without a restart.
+    command: ["sh", "-c", "(while :; do sleep 6h; nginx -s reload; done) & exec nginx -g 'daemon off;'"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${TLS_DIR}:/etc/nginx/tls:ro
+      - certbot_www:/var/www/certbot:ro
+    depends_on:
+      gateway: {condition: service_healthy}
+      web: {condition: service_healthy}
+      api: {condition: service_healthy}
+    networks: [data, public]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 128M}
+    logging: *logging
+
+  # Obtains and renews the Let's Encrypt certificate (deploy/prod/tls.sh). Not started unless a
+  # domain is set up: without one nginx serves the self-signed certificate.
+  certbot:
+    image: certbot/certbot:v5.10.0
+    profiles: [tls]
+    init: true
+    restart: unless-stopped
+    entrypoint: ["sh", "-c", "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --deploy-hook /hooks/deploy.sh; sleep 12h & wait $${!}; done"]
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+      - ${TLS_DIR}:/tls
+      - ./prod/certbot-deploy-hook.sh:/hooks/deploy.sh:ro
+    networks: [data, public]
+    logging: *logging
+
+networks:
+  # Reachable from outside: only nginx joins it.
+  public:
+
+volumes:
+  certbot_www:
+  letsencrypt:
+
+# The files live on the server, outside the repository (permissions 600, see deploy/prod/setup.sh).
+secrets:
+  postgres_password:
+    file: ${SECRETS_DIR}/postgres_password
+  redis_password:
+    file: ${SECRETS_DIR}/redis_password
+  rabbitmq_password:
+    file: ${SECRETS_DIR}/rabbitmq_password
+  jwt_secret:
+    file: ${SECRETS_DIR}/jwt_secret
+  key_pepper:
+    file: ${SECRETS_DIR}/key_pepper
+  admin_password:
+    file: ${SECRETS_DIR}/admin_password
+  master_keys:
+    file: ${SECRETS_DIR}/master_keys
