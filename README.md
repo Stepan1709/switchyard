@@ -411,6 +411,89 @@ Tracing is off unless `OTEL_ENABLED=true` (`make up-full` sets it). A trace foll
 - A message carries the W3C `traceparent` in its AMQP headers and the consumer continues the trace. An event written to the outbox keeps the `traceparent` of the request that wrote it (column `outbox.traceparent`), so the trace survives the wait in the table. Starting a calibration therefore shows one trace: the API request, the published jobs, each replay and its call to the provider.
 - Log lines carry `trace_id` and `span_id` next to `correlation_id`.
 
+## Reliability and load
+
+### Failure scenarios (`make chaos`)
+
+Run against the live stack (`make up` first) with a steady stream of client requests. Each scenario breaks something and checks what is promised; the numbers below are from one run at 20 requests per second.
+
+| Scenario | What happens | Result |
+|---|---|---|
+| Postgres stopped for 15 s | the gateway answers from its in-memory snapshot | 606 answered, 0 failed; `/health/ready` stays 200; all 606 rows reach the log after recovery |
+| RabbitMQ restarted | events wait in the gateway's buffer | 467 answered, 0 failed; 467 of 467 rows in the log |
+| RabbitMQ down for 30 s at 120 requests/s | the buffer (2000 events) overflows | 4059 answered, 0 failed; 1699 events dropped and counted in `log_events_dropped_total`; 2360 rows in the log = 4059 - 1699, nothing else missing |
+| Redis stopped for 12 s | limits and budgets are not enforced meanwhile, proxying goes on | 523 answered, 0 failed; the admin API works right after the restart |
+| Worker killed (SIGKILL) in the middle of a calibration | unacknowledged jobs are redelivered | 120 jobs, 120 results, no duplicates (unique key) |
+| First model of a rule returns 503, then hangs | the next model of the rule answers | all answered by the fallback; a hang is noticed after the 30 s first-byte timeout |
+
+The scenarios found a bug: after a Redis restart the admin API answered 500 once, because the connection pool held dead connections. The `api` and `worker` Redis clients now retry briefly and check their connections. The gateway keeps its fail-open design (short timeouts, no retries) on purpose.
+
+### Load (`make load`)
+
+Limits imitate a small VPS (gateway and worker 1 CPU / 512 MB each). The mock provider answers instantly, so what is measured is the gateway. The load generator runs on the same machine, which makes the numbers conservative.
+
+#### Gateway overhead (instant mock; latencies in ms)
+
+| Users | Path | req/s | p50 | p95 | p99 | failed |
+|---|---|---|---|---|---|---|
+| 1 | mock directly | 793 | 1 | 2 | 2 | 0.00% |
+| 1 | through the gateway | 171 | 5 | 8 | 13 | 0.00% |
+| 1 | **added by the gateway** | | +4 | +6 | +11 | |
+| 16 | mock directly | 1,489 | 8 | 14 | 22 | 0.00% |
+| 16 | through the gateway | 176 | 69 | 210 | 340 | 0.00% |
+| 16 | **added by the gateway** | | +61 | +196 | +318 | |
+
+#### Throughput through the gateway
+
+| Users | req/s | p50 | p95 | p99 | failed | gateway container |
+|---|---|---|---|---|---|---|
+| 8 | 206 | 32 | 75 | 110 | 0.00% | CPU avg 67% max 102%, memory max 103 MB |
+| 16 | 171 | 73 | 210 | 320 | 0.00% | CPU avg 71% max 98%, memory max 91 MB |
+| 32 | 155 | 160 | 520 | 720 | 0.00% | CPU avg 73% max 98%, memory max 91 MB |
+| 64 | 131 | 350 | 1300 | 2100 | 0.00% | CPU avg 58% max 99%, memory max 92 MB |
+| 128 | 111 | 700 | 3500 | 5700 | 0.00% | CPU avg 75% max 100%, memory max 96 MB |
+
+Most without a failed request: **206 req/s** at 8 users.
+
+#### Cost of a log line per request (32 users)
+
+| Request log | req/s | p50 | p95 | p99 | failed |
+|---|---|---|---|---|---|
+| on (default) | 163 | 150 | 490 | 690 | 0.00% |
+| off | 144 | 150 | 480 | 780 | 0.00% |
+
+#### Cost of the traffic log (32 users)
+
+| Bodies | req/s | p50 | p95 | p99 | failed |
+|---|---|---|---|---|---|
+| stored | 157 | 150 | 520 | 800 | 0.00% |
+| not stored | 154 | 160 | 520 | 790 | 0.00% |
+
+#### 300 concurrent streams (each held open about 3 s)
+
+| Streams completed | failed | stream duration p50 / p95 (ms) | peak in flight | gateway container |
+|---|---|---|---|---|
+| 2376 | 0 | 2200 / 8400 | 300 | n/a |
+
+Traffic events dropped during the streams: 435.
+
+#### Traffic log catch-up
+
+After the load the worker still had 759 events to write: 6 s, about 136 rows/s (one worker, 1 CPU).
+
+#### Calibration speed (one worker, 1 CPU, instant mock)
+
+300 replays in 5.7 s = **3,140 replays per minute**.
+
+
+How to read it:
+
+- One gateway process on one CPU carries about 200 requests/s and adds about 4 ms to a request at low load. Beyond that the CPU is the limit: more users only lengthen the queue (latency), they do not cause errors.
+- Neither a log line per request nor storing the bodies shows a difference larger than the noise of the measurement.
+- 300 concurrent streams (each held open about 3 s) all completed. The default limit of 200 concurrent calls per provider is a protection that answers 503 beyond it; the measurement raises it to 400. With the log writer slower than the gateway under this overload, the gateway's buffer overflowed and dropped 435 traffic events, counted as promised.
+- The worker writes the traffic log at about 140 rows/s on one CPU and replays about 3,000 calibration requests per minute (the mock is instant: a real provider is the limit there).
+- To carry more, run more gateway containers: their state is a copy of the snapshot, and limits and budgets live in Redis.
+
 ## Repository layout
 
 ```
@@ -418,7 +501,8 @@ services/api/   application code (api, gateway and worker entry points), migrati
 services/web/   admin web interface (pages, sessions, tests, Dockerfile)
 services/mock_llm/   OpenAI-compatible provider simulator
 deploy/         compose files, Prometheus and Grafana configuration, secret templates
-scripts/        helper scripts
+scripts/        helper scripts: gateway benchmark, failure scenarios (chaos), load driver
+loadtest/       Locust scenarios
 docs/adr/       architecture decision records
 ```
 

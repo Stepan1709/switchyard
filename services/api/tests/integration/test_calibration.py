@@ -474,6 +474,29 @@ async def test_the_same_seed_picks_the_same_requests_and_stratified_runs_work(cl
     assert len(await picked(s)) == 5 and s["strategy"] == "stratified"
 
 
+async def test_requests_logged_without_bodies_are_never_sampled(client, env, api_app):
+    """A project that does not store bodies leaves the JSON value `null` in old rows; `IS NOT
+    NULL` accepted them and the replay of such a sample crashed (found by the load test)."""
+    await sql(api_app, "DELETE FROM requests")
+    rows = [
+        {
+            "task_type": "classification",
+            "model_id": uuid.UUID(env.reference_id),
+            "request_payload": {"messages": [{"role": "user", "content": f"prompt {i}"}]},
+            "response_payload": answer(),
+        }
+        for i in range(6)
+    ]
+    await insert_rows(api_app, env.project_id, rows)
+    await sql(
+        api_app,
+        "UPDATE requests SET request_payload = 'null'::jsonb, response_payload = 'null'::jsonb"
+        " WHERE request_id IN (SELECT request_id FROM requests ORDER BY request_id LIMIT 4)",
+    )
+    run = (await start_run(client, env, "tiny", sample_size=10)).json()
+    assert run["samples_taken"] == 2  # only the two rows that really have bodies
+
+
 async def test_duplicate_prompts_are_replayed_once(client, env, api_app):
     same = {"messages": [{"role": "user", "content": "the very same prompt"}]}
     await sql(api_app, "DELETE FROM requests")

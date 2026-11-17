@@ -13,6 +13,10 @@ select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "C4", "SIM", "RUF"]
 # Tests keep readable one-line assertions and request bodies.
 "**/tests/**" = ["E501", "C408"]  # dict(status=...) reads better for test data
 
+# Helper scripts (not part of the application) may use long lines and plain file reads.
+"scripts/*.py" = ["E501", "ASYNC240"]
+"loadtest/*.py" = ["E501"]
+
 [lint.isort]
 known-first-party = ["app"]
 

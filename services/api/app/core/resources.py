@@ -9,6 +9,10 @@ import aio_pika
 import httpx
 from aio_pika.abc import AbstractRobustChannel, AbstractRobustConnection
 from redis.asyncio import Redis
+from redis.asyncio.retry import Retry
+from redis.backoff import ExponentialBackoff
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -68,7 +72,16 @@ async def open_resources(settings: Settings) -> Resources:
     )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     # decode_responses: values are JSON text; binary payloads are not stored in Redis.
-    redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    # After a Redis restart the pool still holds dead connections: without a retry the first
+    # command on each of them fails with ConnectionError (a 500 for whoever asked). A short
+    # retry with backoff reconnects instead, and the health check drops dead ones early.
+    redis = Redis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        retry=Retry(ExponentialBackoff(cap=1.0, base=0.1), 3),
+        retry_on_error=[RedisConnectionError, RedisTimeoutError],
+        health_check_interval=10,
+    )
     connection = await aio_pika.connect_robust(
         settings.amqp_url, client_properties={"connection_name": settings.service_name}
     )

@@ -221,6 +221,14 @@ async def test_a_project_can_keep_metadata_only(client, admin, gw, stack, api_ap
     [row] = await fetch(api_app, f"request_id = '{rid}'")
     assert row["request_payload"] is None and row["response_payload"] is None
     assert row["payload_skipped"] is False  # not stored because the project said so, not by size
+    # SQL NULL, not the JSON value `null` (which `IS NOT NULL` would count as a body)
+    assert (
+        await count(
+            api_app,
+            f"request_id = '{rid}' AND request_payload IS NULL AND response_payload IS NULL",
+        )
+        == 1
+    )
     assert row["prompt_tokens"] > 0 and row["status"] == "ok"  # the metadata is still there
     assert await count(api_app, "request_payload::text LIKE '%private words%'") == 0
 

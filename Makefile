@@ -7,7 +7,7 @@ SECRETS := postgres_password redis_password rabbitmq_password jwt_secret key_pep
 export UV_LINK_MODE := copy
 
 .DEFAULT_GOAL := help
-.PHONY: help env secrets up up-full down logs migrate create-admin check-shutdown bench test clean-test-containers lint fmt check-compose pre-commit
+.PHONY: help env secrets up up-full chaos load down logs migrate create-admin check-shutdown bench test clean-test-containers lint fmt check-compose pre-commit
 
 help: ## List commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -43,6 +43,20 @@ logs: ## Follow container logs
 
 up-full: env secrets ## make up + Prometheus, Grafana (:3000) and Jaeger (:16686), with tracing switched on
 	OTEL_ENABLED=true $(COMPOSE) --profile monitoring --profile tracing up -d --build --wait
+
+# The mock headers (x-mock-fail ...) must reach the mock provider, so the gateway is recreated
+# with them allowed. Everything restarts the services it breaks before it ends.
+chaos: env secrets ## Failure scenarios against the running stack (start it with `make up` first)
+	FORWARD_HEADER_PREFIXES=x-mock- $(COMPOSE) up -d --wait gateway
+	cd services/api && uv run python ../../scripts/chaos.py
+
+# 400 concurrent calls per provider (the default is 200) so that 300 open streams are not refused.
+LOAD_ENV := FORWARD_HEADER_PREFIXES=x-mock- MOCK_TIME_SCALE=0 GATEWAY_PROVIDER_MAX_CONCURRENCY=400
+
+load: env secrets ## Load tests with container limits of a small VPS; prints the README table
+	$(LOAD_ENV) $(COMPOSE) -f deploy/compose.load.yml up -d --build --wait
+	$(LOAD_ENV) COMPOSE_FILES="deploy/compose.yml deploy/compose.dev.yml deploy/compose.load.yml" \
+	  uv run --project loadtest python scripts/load.py
 
 migrate: env secrets ## Apply database migrations (one-shot container)
 	$(COMPOSE) run --rm --build migrate

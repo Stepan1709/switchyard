@@ -65,8 +65,10 @@ class TrafficRequest(Base):
     ttft_ms: Mapped[float | None] = mapped_column(Float)
     duration_ms: Mapped[float | None] = mapped_column(Float)
     overhead_ms: Mapped[float | None] = mapped_column(Float)
-    request_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
-    response_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # none_as_null: "no body" is SQL NULL. Without it SQLAlchemy stores the JSON value `null`,
+    # which `IS NOT NULL` accepts, so a request logged without its body looked replayable.
+    request_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
+    response_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
     payload_skipped: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     payload_masked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     # An agent's conversation: the client's x-session-id, or a key derived from the first

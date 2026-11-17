@@ -1,0 +1,15 @@
+# Resource limits for load measurements: a small VPS (1 vCPU class) for the gateway and the
+# worker, and a mock provider that is not the bottleneck. Used by `make load` only.
+services:
+  gateway:
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512M}
+  worker:
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512M}
+  mock_llm:
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 256M}

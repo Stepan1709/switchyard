@@ -95,3 +95,11 @@ async def test_dependencies_hand_out_working_resources(running_app):
         app = running_app
 
     assert not get_amqp_channel(_Req()).is_closed  # type: ignore[arg-type]
+
+
+async def test_the_redis_client_retries_and_checks_its_connections(api_app):
+    """After a Redis restart the pool holds dead connections; without these settings the
+    first command on each fails (found by the chaos scenarios)."""
+    kwargs = api_app.state.resources.redis.connection_pool.connection_kwargs
+    assert kwargs["retry"] is not None and kwargs["health_check_interval"] > 0
+    assert kwargs["retry_on_error"]

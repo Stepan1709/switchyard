@@ -164,6 +164,15 @@ class Consumer:
     ) -> str:
         """Retry, defer or dead-letter the message. Returns the outcome for the metrics."""
         decision = retry.decide(exc, message.attempt, len(self.retry_delays_ms))
+        if decision.reason == "unexpected":
+            # Not one of our own error types: a bug. The message goes to the DLQ with the error
+            # name only, so the traceback has to be logged here or it is lost.
+            log.error(
+                "message_handler_crashed",
+                queue=self.spec.name,
+                message_id=message.message_id,
+                exc_info=exc,
+            )
         try:
             if decision.action == "defer":
                 # Back through the first retry queue with the SAME attempt number.

@@ -192,6 +192,8 @@ services:
       # Headers with these prefixes are passed to the provider (the demo uses "x-mock-").
       FORWARD_HEADER_PREFIXES: ${FORWARD_HEADER_PREFIXES:-}
       GATEWAY_DEFAULT_RPM: ${GATEWAY_DEFAULT_RPM:-600}
+      GATEWAY_LOG_REQUESTS: ${GATEWAY_LOG_REQUESTS:-true}
+      GATEWAY_PROVIDER_MAX_CONCURRENCY: ${GATEWAY_PROVIDER_MAX_CONCURRENCY:-200}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)"]
       interval: 10s

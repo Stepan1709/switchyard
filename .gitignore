@@ -31,3 +31,4 @@ Thumbs.db
 # Docker / build artifacts
 *.log
 node_modules/
+loadtest/results/
