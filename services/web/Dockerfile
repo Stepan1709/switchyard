@@ -3,7 +3,7 @@
 # the Tailwind standalone binary, so neither Node nor a CDN is needed anywhere.
 
 # ---- stage 1: the stylesheet -----------------------------------------------------------------
-FROM python:3.12.16-slim-bookworm AS css
+FROM python:3.15.2-slim-bookworm AS css
 ARG TARGETARCH
 ARG TAILWIND_VERSION=v4.3.5
 # The binary is checked against a known checksum: a changed release fails the build.
@@ -32,7 +32,7 @@ COPY app/static/css/input.css ./app/static/css/input.css
 RUN tailwindcss --input app/static/css/input.css --output app/static/css/app.css --minify
 
 # ---- stage 2: the dependencies ---------------------------------------------------------------
-FROM python:3.12.16-slim-bookworm AS builder
+FROM python:3.15.2-slim-bookworm AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 WORKDIR /srv
@@ -44,7 +44,7 @@ COPY app ./app
 COPY --from=css /srv/app/static/css/app.css ./app/static/css/app.css
 
 # ---- stage 3: the image that runs ------------------------------------------------------------
-FROM python:3.12.16-slim-bookworm AS runtime
+FROM python:3.15.2-slim-bookworm AS runtime
 ENV PATH="/srv/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 RUN groupadd --system --gid 10001 app && useradd --system --uid 10001 --gid app --no-create-home app
 WORKDIR /srv
