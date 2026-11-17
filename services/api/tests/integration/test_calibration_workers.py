@@ -37,7 +37,7 @@ class WorkerProcess:
             "RABBITMQ_PORT": str(settings.rabbitmq_port),
             "RABBITMQ_PASSWORD": settings.rabbitmq_password.get_secret_value(),
             "MASTER_KEYS": MASTER_KEYS,
-            "LOCAL_PROVIDER_HOSTS": "localhost",
+            "LOCAL_PROVIDER_HOSTS": "localhost,127.0.0.1",
             "WORKER_PORT": str(self.port),
             "RETRY_DELAYS_MS": "200,400",
             "OUTBOX_POLL_INTERVAL": "0.1",

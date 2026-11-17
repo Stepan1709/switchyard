@@ -83,8 +83,10 @@ def make_settings(pg: Endpoint, redis: Endpoint, rabbit: Endpoint, **overrides: 
         jwt_secret=JWT_SECRET,  # type: ignore[arg-type]
         key_pepper=KEY_PEPPER,  # type: ignore[arg-type]
         master_keys=MASTER_KEYS,  # type: ignore[arg-type]
-        # `localhost` stands for a self-hosted provider (the mock server started by a fixture).
-        local_provider_hosts=["localhost"],
+        # The mock server of a fixture is a self-hosted provider. It is addressed by 127.0.0.1, not
+        # by `localhost`: on some machines (GitHub runners) that name resolves to ::1 first, where
+        # the mock does not listen.
+        local_provider_hosts=["localhost", "127.0.0.1"],
         **overrides,  # type: ignore[arg-type]
     )
 
@@ -225,7 +227,7 @@ MOCK_ROOT = API_ROOT.parent / "mock_llm"
 
 @dataclass
 class MockServer:
-    base_url: str  # http://localhost:<port>/v1
+    base_url: str  # http://127.0.0.1:<port>/v1
     port: int
 
 
@@ -251,7 +253,7 @@ def _start_mock(time_scale: str) -> Iterator[MockServer]:
                 time.sleep(0.1)
         else:
             raise RuntimeError("mock_llm did not start")
-        yield MockServer(f"http://localhost:{port}/v1", port)
+        yield MockServer(f"http://127.0.0.1:{port}/v1", port)
     finally:
         proc.terminate()
         try:

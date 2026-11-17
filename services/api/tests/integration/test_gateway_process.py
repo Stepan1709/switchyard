@@ -37,7 +37,7 @@ class GatewayProcess:
             "REDIS_PASSWORD": settings.redis_password.get_secret_value(),
             "KEY_PEPPER": settings.key_pepper.get_secret_value(),
             "MASTER_KEYS": MASTER_KEYS,
-            "LOCAL_PROVIDER_HOSTS": "localhost",
+            "LOCAL_PROVIDER_HOSTS": "localhost,127.0.0.1",
             "FORWARD_HEADER_PREFIXES": "x-mock-",
             "GATEWAY_DEFAULT_RPM": "100000",
             **extra_env,
