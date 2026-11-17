@@ -6,6 +6,7 @@ and tests never requires secrets or touches the environment.
 
 from fastapi import FastAPI
 
+from app.core import metrics, tracing
 from app.core.config import Settings
 from app.core.errors import install_error_handlers
 from app.core.lifespan import make_lifespan
@@ -29,6 +30,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(settings.service_name, settings.env, settings.log_level)
     app = FastAPI(title="Switchyard API", lifespan=make_lifespan(settings))
     app.add_middleware(CorrelationIdMiddleware)
+    metrics.add_metrics_endpoint(app, "api")
+    tracing.setup(settings, app)
     install_error_handlers(app)
     app.include_router(health_router)
     app.include_router(auth_router)

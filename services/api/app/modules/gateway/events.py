@@ -20,6 +20,7 @@ from typing import Any
 import aio_pika
 from aio_pika.abc import AbstractRobustConnection
 
+from app.core import metrics, tracing
 from app.core.config import Settings
 from app.core.events import REQUEST_COMPLETED, RequestCompleted
 from app.core.logging import get_logger
@@ -142,6 +143,7 @@ class TrafficEventPublisher:
             self._empty.set()
         if dropped:
             self.dropped_total += dropped
+            metrics.LOG_EVENTS_DROPPED.inc(dropped)
             log.error(
                 "log_events_dropped",
                 dropped=dropped,
@@ -228,6 +230,7 @@ class TrafficEventPublisher:
             payload=payload,
             message_id=record.request_id,  # one id per request: a re-send is recognisable
             correlation_id=record.request_id,
+            headers={tracing.TRACEPARENT: record.traceparent} if record.traceparent else {},
         )
 
     # ---- shutdown ----

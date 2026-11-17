@@ -26,7 +26,7 @@ from typing import Any
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.core import ssrf
+from app.core import metrics, ssrf
 from app.core.config import Settings
 from app.core.crypto import DecryptionError, KeyRing
 from app.core.logging import get_logger
@@ -270,5 +270,7 @@ class ReplayExecutor:
         async with self._res.session_factory() as session, session.begin():
             repo = CalibrationRepository(session)
             inserted = await repo.insert_result(values)
+            if inserted:
+                metrics.REPLAY_RESULTS.labels(str(values.get("status", "unknown"))).inc()
             if inserted:
                 await complete_if_done(session, repo, job.run_id)

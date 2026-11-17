@@ -18,6 +18,8 @@ from typing import Any
 import aio_pika
 from aio_pika.abc import AbstractIncomingMessage
 
+from app.core import tracing
+
 SCHEMA_VERSION = 1
 H_SCHEMA = "x-schema-version"
 H_RETRY = "x-retry"
@@ -42,7 +44,10 @@ class Message:
         return int(self.headers.get(H_RETRY, 0) or 0)
 
     def to_amqp(self, extra_headers: dict[str, Any] | None = None) -> aio_pika.Message:
-        headers = {**self.headers, H_SCHEMA: self.schema_version, **(extra_headers or {})}
+        # A message keeps the trace it already has (a retry, an outbox event); a new one takes
+        # the trace of whoever is publishing it.
+        headers = {**tracing.trace_headers(), **self.headers}
+        headers = {**headers, H_SCHEMA: self.schema_version, **(extra_headers or {})}
         return aio_pika.Message(
             body=json.dumps(self.payload, separators=(",", ":"), default=str).encode(),
             content_type="application/json",

@@ -41,6 +41,18 @@ services:
     ports: ["127.0.0.1:${MOCK_LLM_PORT:-8003}:8003"]
     networks: [data, access]
 
+  prometheus:
+    ports: ["127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"]
+    networks: [data, access]
+
+  grafana:
+    ports: ["127.0.0.1:${GRAFANA_PORT:-3000}:3000"]
+    networks: [data, access]
+
+  jaeger:
+    ports: ["127.0.0.1:${JAEGER_PORT:-16686}:16686"]
+    networks: [data, access]
+
   adminer:
     image: adminer:5.5.1
     restart: unless-stopped

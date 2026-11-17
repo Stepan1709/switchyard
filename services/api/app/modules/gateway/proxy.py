@@ -25,7 +25,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 
-from app.core import ssrf
+from app.core import metrics, ssrf, tracing
 from app.core.config import Settings
 from app.core.logging import correlation_id_var, get_logger
 from app.core.snapshot import KeyInfo, LiveSnapshot, RouteTarget, SnapshotStore
@@ -177,6 +177,7 @@ class GatewayProxy:
         return sem
 
     def _finish(self, rec: RequestRecord, started: float) -> None:
+        metrics.GATEWAY_IN_FLIGHT.dec()
         rec.duration_ms = _ms(started)
         if rec.price is not None:
             rec.cost_usd = request_cost(rec.price, rec.prompt_tokens, rec.completion_tokens)
@@ -205,6 +206,8 @@ class GatewayProxy:
         started = time.perf_counter()
         request_id = str(uuid.uuid4())
         rec = RequestRecord(request_id=request_id, started_at=datetime.now(UTC))
+        rec.traceparent = tracing.current_traceparent()
+        metrics.GATEWAY_IN_FLIGHT.inc()  # decreased in _finish, which every request reaches once
         token = correlation_id_var.set(request_id)
         base_headers = {"x-request-id": request_id}
         try:
@@ -273,6 +276,14 @@ class GatewayProxy:
             correlation_id_var.reset(token)
 
     @staticmethod
+    def _attempt(target: RouteTarget, outcome: str, started: float) -> None:
+        """One call to a provider: how it ended and how long it took."""
+        metrics.PROVIDER_ATTEMPTS.labels(target.provider_name, target.model_name, outcome).inc()
+        metrics.PROVIDER_LATENCY.labels(target.provider_name, target.model_name).observe(
+            time.perf_counter() - started
+        )
+
+    @staticmethod
     def _point_at(rec: RequestRecord, headers: dict[str, str], target: RouteTarget) -> None:
         """Say which model this request is going to (updated if a fallback takes over)."""
         rec.model, rec.provider = target.model_name, target.provider_name
@@ -301,12 +312,23 @@ class GatewayProxy:
             if index:
                 self._point_at(rec, base_headers, target)
                 prepared = build_prepared(parsed, target.model_name)
+            attempt_started = time.perf_counter()
             try:
-                return await self._forward(
+                response = await self._forward(
                     request, live, target, prepared, rec, base_headers, started, capture,
                     plan.validation_schema if not prepared.stream else None, can_fall_back=not last,
                 )  # fmt: skip
+                self._attempt(target, "ok", attempt_started)
+                return response
+            except GatewayError as exc:  # the last model of the chain failed: nothing to fall to
+                self._attempt(target, exc.code or "error", attempt_started)
+                raise
             except _TryNext as nxt:
+                reason = (nxt.error.code if nxt.error else None) or "bad_status_or_answer"
+                self._attempt(target, reason, attempt_started)
+                metrics.GATEWAY_FALLBACKS.labels(
+                    target.provider_name, target.model_name, reason
+                ).inc()
                 rec.fallbacks += 1
                 last_error = nxt.error or last_error
                 log.info(

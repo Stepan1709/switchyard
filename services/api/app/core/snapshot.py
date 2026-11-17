@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import time
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -29,6 +30,7 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core import metrics
 from app.core.crypto import DecryptionError, KeyRing
 from app.core.logging import get_logger
 
@@ -319,6 +321,7 @@ class SnapshotStore:
         self.source: str = "none"  # "database" | "redis"
         self.last_refresh_ok: bool = False
         self.refreshes = 0
+        self.confirmed_at = 0.0  # monotonic time of the last successful refresh or load
 
     # ---- installing -----------------------------------------------------------------------
     def _install(self, snapshot: Snapshot, source: str) -> None:
@@ -341,6 +344,7 @@ class SnapshotStore:
                 keys[ref.provider_id] = None
         self.current = LiveSnapshot(snapshot, keys)  # the atomic swap
         self.source = source
+        self.confirmed_at = time.monotonic()
         log.info(
             "snapshot_installed",
             version=snapshot.version,
@@ -357,12 +361,15 @@ class SnapshotStore:
                 fresh = await build_snapshot(session)
         except Exception as exc:
             self.last_refresh_ok = False
+            metrics.SNAPSHOT_REFRESHES.labels("failed").inc()
             log.warning("snapshot_refresh_failed", error=type(exc).__name__)
             if self.current is None:
                 return await self._load_from_redis()
             return False
         self.last_refresh_ok = True
         self.refreshes += 1
+        self.confirmed_at = time.monotonic()  # the database agrees: the snapshot is fresh
+        metrics.SNAPSHOT_REFRESHES.labels("ok").inc()
         if self.current is None or self.current.snapshot.version != fresh.version:
             self._install(fresh, "database")
             await self._save_to_redis(fresh)

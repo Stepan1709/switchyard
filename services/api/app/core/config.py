@@ -212,6 +212,13 @@ class Settings(BaseSettings):
     admin_email: str = ""
     admin_password: SecretStr = SecretStr("")
 
+    # Observability. Metrics are always on; tracing is opt-in (the `tracing` profile).
+    otel_enabled: bool = False
+    otel_endpoint: str = "http://jaeger:4318"
+    otel_sample_ratio: float = 1.0
+    # How often the worker reads queue depths, the outbox and the calibration runs for metrics.
+    metrics_refresh_seconds: float = 15.0
+
     @classmethod
     def settings_customise_sources(
         cls,

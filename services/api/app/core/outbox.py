@@ -19,6 +19,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core import tracing
 from app.core.db import Base
 from app.core.logging import get_logger
 from app.core.messaging.envelope import Message
@@ -54,6 +55,9 @@ class OutboxEvent(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     last_error: Mapped[str | None] = mapped_column(String(500))
+    # W3C traceparent of the request that wrote the event: the trace continues in the worker
+    # that handles it, however long the row waits in the table.
+    traceparent: Mapped[str | None] = mapped_column(String(64))
 
 
 def enqueue(
@@ -70,6 +74,7 @@ def enqueue(
         type=event_type,
         payload=payload,
         correlation_id=correlation_id or correlation_id_var.get(),
+        traceparent=tracing.current_traceparent(),
     )
     session.add(event)
     return event.id
@@ -115,9 +120,11 @@ class OutboxRelay:
                     payload=row.payload,
                     message_id=str(row.id),
                     correlation_id=row.correlation_id,
+                    headers={tracing.TRACEPARENT: row.traceparent} if row.traceparent else {},
                 )
                 try:
-                    await self._publisher.publish_event(message)
+                    with tracing.producer_span(f"publish {row.type}", message.headers):
+                        await self._publisher.publish_event(message)
                 except UnroutableError as exc:
                     # Nobody is subscribed. That must not block the events behind this one:
                     # try a few times (a consumer may still be starting), then drop and log.

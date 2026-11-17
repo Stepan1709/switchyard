@@ -51,6 +51,7 @@ class RequestRecord:
     step: int | None = None
     shadow_model_ids: list[str] = field(default_factory=list)
     fallbacks: int = 0  # how many models were tried before the one that answered
+    traceparent: str | None = None  # the trace of this request, for the traffic event
     # Costing: the prices of the model that answers and of the project's reference model, and
     # whether the key has a budget to charge. The costs are worked out when the request ends.
     price: Price | None = None

@@ -14,6 +14,7 @@ Delivery is therefore at-least-once. Handlers must be idempotent; use the inbox
 """
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -26,10 +27,11 @@ from aio_pika.abc import (
     AbstractRobustConnection,
 )
 
+from app.core import metrics, tracing
 from app.core.logging import correlation_id_var, get_logger
 from app.core.messaging import retry
 from app.core.messaging.envelope import H_RETRY, InvalidMessage, Message
-from app.core.messaging.errors import PublishError
+from app.core.messaging.errors import Deferred, PublishError
 from app.core.messaging.publisher import Publisher
 from app.core.messaging.topology import QueueNames, declare_work_queue
 
@@ -124,28 +126,43 @@ class Consumer:
                 self._idle.set()
 
     async def _handle(self, incoming: AbstractIncomingMessage) -> None:
+        started = time.perf_counter()
         try:
             message = Message.from_incoming(incoming)
         except InvalidMessage as exc:
-            await self._fail(incoming, self._raw_message(incoming), exc)
+            outcome = await self._fail(incoming, self._raw_message(incoming), exc)
+            self._count(outcome, started)
             return
 
         token = correlation_id_var.set(message.correlation_id or message.message_id)
+        outcome = "ok"
         try:
-            await self.spec.handler(message)
+            with tracing.consumer_span(self.spec.name, message.type, message.headers) as span:
+                try:
+                    await self.spec.handler(message)
+                except Exception as exc:
+                    if not isinstance(exc, Deferred):  # waiting for a slot is not a failure
+                        tracing.mark_error(span, exc)
+                    raise
         except asyncio.CancelledError:
             raise  # shutting down: leave the message unacked so that it is redelivered
         except Exception as exc:
-            await self._fail(incoming, message, exc)
+            outcome = await self._fail(incoming, message, exc)
         else:
             await self._ack(incoming)
             log.debug("message_done", queue=self.spec.name, message_id=message.message_id)
         finally:
             correlation_id_var.reset(token)
+        self._count(outcome, started)
+
+    def _count(self, outcome: str, started: float) -> None:
+        metrics.WORKER_MESSAGES.labels(self.spec.name, outcome).inc()
+        metrics.WORKER_DURATION.labels(self.spec.name).observe(time.perf_counter() - started)
 
     async def _fail(
         self, incoming: AbstractIncomingMessage, message: Message, exc: Exception
-    ) -> None:
+    ) -> str:
+        """Retry, defer or dead-letter the message. Returns the outcome for the metrics."""
         decision = retry.decide(exc, message.attempt, len(self.retry_delays_ms))
         try:
             if decision.action == "defer":
@@ -193,8 +210,9 @@ class Consumer:
             log.error("failure_publish_failed", queue=self.spec.name, error=str(publish_exc))
             await asyncio.sleep(self.requeue_pause)  # avoid a hot loop while the broker is sick
             await self._safe(incoming.nack(requeue=True))
-            return
+            return "requeued"
         await self._ack(incoming)
+        return {"defer": "deferred", "retry": "retry"}.get(decision.action, "dead_letter")
 
     async def _ack(self, incoming: AbstractIncomingMessage) -> None:
         # If the channel died meanwhile the broker redelivers; idempotent handlers make that safe.

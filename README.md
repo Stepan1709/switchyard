@@ -385,13 +385,39 @@ It is a thin client of the admin API, so it has no database access:
 - **Headers.** A Content-Security-Policy without inline scripts, `X-Frame-Options: DENY`, `nosniff`.
 - Limitation: the API throttles failed logins per client address, and behind the web app that address is the web container's, so the per-address limit is shared by all web users (the per-email limit is not).
 
+## Metrics and tracing
+
+`api` (`:8001`), `gateway` (`:8000`) and `worker` (`:8004`) expose Prometheus metrics at `/metrics`. In production only the proxy paths are published, so `/metrics` stays on the internal network.
+
+```bash
+make up-full    # make up + Prometheus (:9090), Grafana (:3000, user admin, password from deploy/secrets/dev/admin_password), Jaeger (:16686), tracing on
+make down       # stops those profiles as well
+```
+
+What is measured (names start with `switchyard_`):
+
+| Where | Metrics |
+|---|---|
+| every HTTP process | requests and duration by method, route template and status (never the raw path) |
+| gateway | requests by status, mode, provider and model; total duration, time to first token, **the gateway's own overhead**; tokens and cost; requests in flight; calls to each provider by outcome with their latency; **fallbacks** by reason; snapshot age and refreshes; traffic events dropped and buffered |
+| worker | messages by queue and outcome (ok, retry, deferred, dead letter) and how long they took; **queue depths** including retry and dead-letter queues; outbox backlog and the age of its oldest event; calibration runs by status and the progress of running ones; replay results |
+| caches | hit and miss counts of the DNS and price caches |
+
+Two dashboards are provisioned from `deploy/grafana/dashboards`: *Gateway* (traffic, latency, overhead, providers, fallbacks, cost) and *Pipeline* (queues, dead letters, outbox, calibrations, caches). Two alerts live in `deploy/prometheus/alerts.yml`: a dead-letter queue that grows, and a provider that fails more than 20% of its calls for five minutes. A test checks that every metric a dashboard or alert uses is really exported.
+
+Tracing is off unless `OTEL_ENABLED=true` (`make up-full` sets it). A trace follows a request from the client through the gateway to the provider, and an admin request through RabbitMQ into the worker:
+
+- FastAPI and httpx are instrumented, so a request has a server span and a span for each call it makes.
+- A message carries the W3C `traceparent` in its AMQP headers and the consumer continues the trace. An event written to the outbox keeps the `traceparent` of the request that wrote it (column `outbox.traceparent`), so the trace survives the wait in the table. Starting a calibration therefore shows one trace: the API request, the published jobs, each replay and its call to the provider.
+- Log lines carry `trace_id` and `span_id` next to `correlation_id`.
+
 ## Repository layout
 
 ```
 services/api/   application code (api, gateway and worker entry points), migrations, tests, Dockerfile
 services/web/   admin web interface (pages, sessions, tests, Dockerfile)
 services/mock_llm/   OpenAI-compatible provider simulator
-deploy/         compose files, secret templates
+deploy/         compose files, Prometheus and Grafana configuration, secret templates
 scripts/        helper scripts
 docs/adr/       architecture decision records
 ```

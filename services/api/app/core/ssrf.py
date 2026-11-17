@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from app.core import metrics
 from app.core.errors import AppError
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
@@ -154,6 +155,7 @@ class CachingResolver:
     async def __call__(self, host: str, port: int) -> list[IPAddress]:
         now = self._clock()
         hit = self._cache.get((host, port))
+        metrics.CACHE_REQUESTS.labels("dns", "hit" if hit and hit[0] > now else "miss").inc()
         if hit is not None and hit[0] > now:
             return hit[1]
         addresses = await self._inner(host, port)

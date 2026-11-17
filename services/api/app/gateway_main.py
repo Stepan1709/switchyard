@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -12,7 +13,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core import ssrf
+from app.core import metrics, ssrf, tracing
 from app.core.config import Settings
 from app.core.crypto import KeyRing
 from app.core.logging import configure_logging, get_logger
@@ -25,6 +26,7 @@ from app.modules.gateway.ratelimit import RateLimiter
 from app.modules.gateway.record import CompositeRecorder, LogRecorder, Recorder
 from app.modules.gateway.router import router
 from app.modules.gateway.rules_listener import RulesListener
+from app.modules.gateway.telemetry import MetricsRecorder
 
 log = get_logger(__name__)
 
@@ -80,10 +82,16 @@ def create_app(
             store,
             http,
             RateLimiter(redis),
-            recorder or CompositeRecorder(LogRecorder(settings.gateway_log_requests), events),
+            recorder
+            or CompositeRecorder(
+                LogRecorder(settings.gateway_log_requests), MetricsRecorder(), events
+            ),
             resolver or ssrf.CachingResolver(settings.gateway_resolve_cache_ttl),
             BudgetGuard(redis),
         )
+        # Read at scrape time: nothing runs on the request path for these two.
+        metrics.SNAPSHOT_AGE.set_function(lambda: time.monotonic() - store.confirmed_at)
+        metrics.LOG_EVENTS_BUFFERED.set_function(lambda: events.buffered)
         await store.refresh()  # so that the first request already finds a snapshot
         refresher = asyncio.create_task(store.run(), name="snapshot-refresh")
         sender = asyncio.create_task(events.run(), name="traffic-events")
@@ -115,6 +123,8 @@ def create_app(
         openapi_url=None,
     )
     app.include_router(router)
+    metrics.add_metrics_endpoint(app, "gateway")
+    tracing.setup(settings, app)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(_: Request, exc: StarletteHTTPException) -> JSONResponse:
