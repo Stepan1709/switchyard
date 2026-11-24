@@ -9,13 +9,13 @@ dependencies = [
     "argon2-cffi==25.1.0",
     "asyncpg==0.32.0",
     "cryptography==50.0.2",
-    "email-validator==2.3.0",
-    "fastapi==0.162.5",
+    "email-validator==2.4.0",
+    "fastapi==0.165.0",
     "httpx==0.28.1",
     "pyjwt==2.15.1",
-    "pydantic-settings==2.16.2",
+    "pydantic-settings==2.16.3",
     "redis==8.1.0",
-    "sqlalchemy[asyncio]==2.1.8",
+    "sqlalchemy[asyncio]==2.1.9",
     "structlog==26.1.0",
     "uvicorn==0.54.0",
     "prometheus-client==0.26.0",
@@ -29,12 +29,12 @@ dependencies = [
 [dependency-groups]
 dev = [
     "asgi-lifespan==2.1.0",
-    "hypothesis==6.170.15",
+    "hypothesis==6.170.17",
     "mypy==2.4.1",
     "pytest==9.2.0",
-    "pytest-asyncio==1.4.1.post1",
+    "pytest-asyncio==1.5.0",
     "pytest-cov==7.1.0",
-    "ruff==0.17.4",
+    "ruff==0.17.6",
     "testcontainers==4.15.0",
 ]
 
