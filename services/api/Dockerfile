@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # One image, several entry points (api, gateway, worker). Entry point is chosen by the command.
 
-FROM python:3.12.16-slim-bookworm AS builder
+FROM python:3.15.1-slim-bookworm AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 WORKDIR /srv
@@ -13,7 +13,7 @@ COPY app ./app
 COPY alembic.ini ./
 COPY migrations ./migrations
 
-FROM python:3.12.16-slim-bookworm AS runtime
+FROM python:3.15.1-slim-bookworm AS runtime
 ENV PATH="/srv/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 # Not root: the process gets no extra privileges inside the container.
 RUN groupadd --system --gid 10001 app && useradd --system --uid 10001 --gid app --no-create-home app
